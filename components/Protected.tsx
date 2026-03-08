@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { useTranslation } from '@/lib/i18n';
+import { checkActiveDevice } from '@/lib/activeSession';
+import { getOrCreateDeviceId } from '@/lib/deviceId';
 
 type AllowedRole = 'admin' | 'seller';
 
@@ -12,8 +15,11 @@ interface ProtectedProps {
 }
 
 export default function Protected({ children, role }: ProtectedProps) {
-  const { session, profile, authReady, refreshProfile } = useAuth();
+  const { session, profile, authReady, refreshProfile, signOut } = useAuth();
   const router = useRouter();
+  const { t } = useTranslation();
+  const [deviceOk, setDeviceOk] = useState<boolean | null>(null);
+  const checkDoneRef = useRef(false);
 
   useEffect(() => {
     if (!authReady) return;
@@ -31,6 +37,27 @@ export default function Protected({ children, role }: ProtectedProps) {
       else router.replace('/seller');
     }
   }, [authReady, session, profile, role, router]);
+
+  useEffect(() => {
+    if (!authReady || !session?.user?.id || !profile || profile.is_active === false) return;
+    if (role && profile.role !== role) return;
+    if (checkDoneRef.current) return;
+    checkDoneRef.current = true;
+
+    const deviceId = getOrCreateDeviceId();
+    if (!deviceId) {
+      setDeviceOk(true);
+      return;
+    }
+
+    checkActiveDevice(session.user.id, deviceId).then((ok) => {
+      if (ok) {
+        setDeviceOk(true);
+      } else {
+        signOut(t('auth.deviceConflict'));
+      }
+    });
+  }, [authReady, session?.user?.id, profile, role, signOut, t]);
 
   if (!authReady) {
     return (
@@ -74,6 +101,18 @@ export default function Protected({ children, role }: ProtectedProps) {
         >
           На главную
         </button>
+      </div>
+    );
+  }
+
+  if (deviceOk === false) {
+    return null;
+  }
+
+  if (deviceOk !== true) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <p className="text-lg">{t('common.loading')}</p>
       </div>
     );
   }

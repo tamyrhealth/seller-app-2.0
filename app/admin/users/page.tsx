@@ -100,13 +100,13 @@ export default function AdminUsersPage() {
 
   return (
     <Protected role="admin">
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-white">
         <NavAdmin />
         <div className="p-4">
-          <h1 className="text-2xl font-bold mb-4">Продавцы и пользователи</h1>
+          <h1 className="text-2xl font-bold mb-4 text-gray-900">Продавцы и пользователи</h1>
 
           <div className="mb-4 p-4 bg-amber-50 rounded-lg">
-            <p className="text-sm font-medium mb-2">Инструкция по созданию пользователя:</p>
+            <p className="text-sm font-medium mb-2 text-gray-900">Инструкция по созданию пользователя:</p>
             <ol className="text-sm list-decimal list-inside space-y-1 text-gray-700">
               <li>Откройте Supabase Dashboard → Authentication → Users</li>
               <li>Нажмите Add user → Create new user</li>
@@ -124,19 +124,19 @@ export default function AdminUsersPage() {
           </button>
 
           {showLinkForm && (
-            <div className="bg-gray-50 rounded-lg p-4 mb-4">
-              <h2 className="font-bold mb-2">Привязать пользователя</h2>
-              <input
+            <div className="bg-gray-100 rounded-lg p-4 mb-4">
+              <h2 className="font-bold mb-2 text-gray-900">Привязать пользователя</h2>
+                <input
                 placeholder="User ID (UUID из auth.users)"
                 value={linkForm.user_id}
                 onChange={(e) => setLinkForm({ ...linkForm, user_id: e.target.value })}
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               />
               <input
                 placeholder="Display name"
                 value={linkForm.display_name}
                 onChange={(e) => setLinkForm({ ...linkForm, display_name: e.target.value })}
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               />
               <select
                 value={linkForm.role}
@@ -146,7 +146,7 @@ export default function AdminUsersPage() {
                     role: e.target.value as 'admin' | 'seller',
                   })
                 }
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="seller">Продавец</option>
                 <option value="admin">Админ</option>
@@ -154,7 +154,7 @@ export default function AdminUsersPage() {
               <select
                 value={linkForm.city_id}
                 onChange={(e) => setLinkForm({ ...linkForm, city_id: e.target.value })}
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="">Без города</option>
                 {cities.map((c) => (
@@ -163,7 +163,7 @@ export default function AdminUsersPage() {
                   </option>
                 ))}
               </select>
-              <label className="flex items-center gap-2 mb-2">
+              <label className="flex items-center gap-2 mb-2 text-gray-900">
                 <input
                   type="checkbox"
                   checked={linkForm.is_active}
@@ -180,7 +180,7 @@ export default function AdminUsersPage() {
                 </button>
                 <button
                   onClick={() => setShowLinkForm(false)}
-                  className="px-4 py-2 bg-gray-300 rounded-lg"
+                  className="px-4 py-2 bg-gray-300 text-gray-900 rounded-lg"
                 >
                   Отмена
                 </button>
@@ -189,20 +189,20 @@ export default function AdminUsersPage() {
           )}
 
           {editProfile && (
-            <div className="bg-gray-50 rounded-lg p-4 mb-4">
-              <h2 className="font-bold mb-2">Редактирование профиля</h2>
+            <div className="bg-gray-100 rounded-lg p-4 mb-4">
+              <h2 className="font-bold mb-2 text-gray-900">Редактирование профиля</h2>
               <input
                 placeholder="Display name"
                 value={editForm.display_name}
                 onChange={(e) => setEditForm({ ...editForm, display_name: e.target.value })}
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               />
               <select
                 value={editForm.role}
                 onChange={(e) =>
                   setEditForm({ ...editForm, role: e.target.value as 'admin' | 'seller' })
                 }
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="seller">Продавец</option>
                 <option value="admin">Админ</option>
@@ -210,7 +210,7 @@ export default function AdminUsersPage() {
               <select
                 value={editForm.city_id}
                 onChange={(e) => setEditForm({ ...editForm, city_id: e.target.value })}
-                className="w-full px-3 py-2 border rounded mb-2"
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="">Без города</option>
                 {cities.map((c) => (
@@ -219,7 +219,7 @@ export default function AdminUsersPage() {
                   </option>
                 ))}
               </select>
-              <label className="flex items-center gap-2 mb-2">
+              <label className="flex items-center gap-2 mb-2 text-gray-900">
                 <input
                   type="checkbox"
                   checked={editForm.is_active}
@@ -236,7 +236,7 @@ export default function AdminUsersPage() {
                 </button>
                 <button
                   onClick={() => setEditProfile(null)}
-                  className="px-4 py-2 bg-gray-300 rounded-lg"
+                  className="px-4 py-2 bg-gray-300 text-gray-900 rounded-lg"
                 >
                   Отмена
                 </button>
@@ -245,19 +245,19 @@ export default function AdminUsersPage() {
           )}
 
           {loading ? (
-            <p>Загрузка...</p>
+            <p className="text-gray-900">Загрузка...</p>
           ) : (
             <div className="space-y-2">
               {profiles.map((p) => (
                 <div
                   key={p.id}
-                  className="flex justify-between items-center p-4 bg-gray-50 rounded-lg"
+                  className="flex justify-between items-center p-4 bg-gray-100 rounded-lg"
                 >
                   <div>
-                    <p className="font-medium">
+                    <p className="font-medium text-gray-900">
                       {p.display_name || p.id.slice(0, 8)} · {p.role}
                     </p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-gray-600">
                       ID: {p.id.slice(0, 8)}... · Город: {cityMap.get(p.city_id || '') || '-'}
                       {!p.is_active && ' · Неактивен'}
                     </p>

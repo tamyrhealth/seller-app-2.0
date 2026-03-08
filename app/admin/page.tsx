@@ -3,8 +3,10 @@
 import { useEffect, useState } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
-import Link from 'next/link';
+import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
+import { sumConfirmedInRange, isConfirmedInRange } from '@/lib/accounting';
+import { getTodayLocalISO, getLocalDayRangeInTz } from '@/lib/datetime';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -24,37 +26,70 @@ interface LowStockItem {
 }
 
 export default function AdminPage() {
+  const { t } = useTranslation();
   const [todayRevenue, setTodayRevenue] = useState(0);
   const [todayOrders, setTodayOrders] = useState(0);
   const [cityRevenues, setCityRevenues] = useState<CityRevenue[]>([]);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const onVis = () => setRefreshKey((k) => k + 1);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   useEffect(() => {
     async function load() {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getTodayLocalISO('Asia/Almaty');
+      const range = getLocalDayRangeInTz(today, 'Asia/Almaty');
+      const fromISO = range.from.toISOString();
+      const toNextISO = range.toNext.toISOString();
 
-      const { data: orders } = await supabase
-        .from('orders')
-        .select('total_sum, city_id')
-        .eq('status', 'confirmed')
-        .gte('created_at', `${today}T00:00:00`)
-        .lt('created_at', `${today}T23:59:59.999`);
+      const [createdRes, fulfilledRes, debtPaidRes] = await Promise.all([
+        supabase
+          .from('orders')
+          .select('id, total_sum, city_id, created_at, status, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at')
+          .gte('created_at', fromISO)
+          .lt('created_at', toNextISO),
+        supabase
+          .from('orders')
+          .select('id, total_sum, city_id, created_at, status, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at')
+          .gte('fulfilled_at', fromISO)
+          .lt('fulfilled_at', toNextISO),
+        supabase
+          .from('orders')
+          .select('id, total_sum, city_id, created_at, status, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at')
+          .gte('debt_paid_at', fromISO)
+          .lt('debt_paid_at', toNextISO),
+      ]);
 
-      const rev = (orders || []).reduce((acc, o) => acc + Number(o.total_sum), 0);
-      setTodayRevenue(rev);
-      setTodayOrders((orders || []).length);
-
-      const cityIds = [...new Set((orders || []).map((o) => o.city_id))];
-      const cityMap = new Map<string, { revenue: number; count: number }>();
-      for (const o of orders || []) {
-        const cur = cityMap.get(o.city_id) || { revenue: 0, count: 0 };
-        cur.revenue += Number(o.total_sum);
-        cur.count += 1;
-        cityMap.set(o.city_id, cur);
+      const seen = new Set<string>();
+      const allRows: Array<{ id?: string; total_sum?: number; city_id?: string; created_at?: string; status?: string; is_preorder?: boolean; preorder_status?: string; fulfilled_at?: string; is_debt?: boolean; debt_status?: string; debt_paid_at?: string }> = [];
+      for (const row of [...(createdRes.data || []), ...(fulfilledRes.data || []), ...(debtPaidRes.data || [])]) {
+        const o = row as { id?: string };
+        if (o.id && !seen.has(o.id)) {
+          seen.add(o.id);
+          allRows.push(row);
+        } else if (!o.id) allRows.push(row);
       }
 
+      const rev = sumConfirmedInRange(allRows, range);
+      const count = allRows.filter((o) => isConfirmedInRange(o, range)).length;
+      setTodayRevenue(rev);
+      setTodayOrders(count);
+
+      const cityMap = new Map<string, { revenue: number; count: number }>();
+      for (const o of allRows) {
+        if (!isConfirmedInRange(o, range)) continue;
+        const cid = o.city_id ?? '';
+        const cur = cityMap.get(cid) || { revenue: 0, count: 0 };
+        cur.revenue += Number(o.total_sum ?? 0);
+        cur.count += 1;
+        cityMap.set(cid, cur);
+      }
       const { data: cities } = await supabase.from('cities').select('id, name');
       const cityNameMap = new Map((cities || []).map((c) => [c.id, c.name]));
 
@@ -88,53 +123,53 @@ export default function AdminPage() {
     }
 
     load();
-  }, []);
+  }, [refreshKey]);
 
   return (
     <Protected role="admin">
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-white">
         <NavAdmin />
         <div className="p-4">
-          <h1 className="text-2xl font-bold mb-6">Дашборд</h1>
+          <h1 className="text-2xl font-bold mb-6 text-gray-900">{t('admin.dashboard')}</h1>
 
           {loading ? (
-            <p>Загрузка...</p>
+            <p className="text-gray-900">{t('common.loading')}</p>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-blue-50 rounded-xl p-4">
-                  <p className="text-sm text-gray-600">Выручка сегодня</p>
-                  <p className="text-2xl font-bold">{formatMoney(todayRevenue)} ₸</p>
+                  <p className="text-sm text-gray-600">{t('admin.todayRevenue')}</p>
+                  <p className="text-2xl font-bold text-gray-900">{formatMoney(todayRevenue)} ₸</p>
                 </div>
                 <div className="bg-green-50 rounded-xl p-4">
-                  <p className="text-sm text-gray-600">Заказов сегодня</p>
-                  <p className="text-2xl font-bold">{todayOrders}</p>
+                  <p className="text-sm text-gray-600">{t('admin.todayOrders')}</p>
+                  <p className="text-2xl font-bold text-gray-900">{todayOrders}</p>
                 </div>
               </div>
 
               <div className="mb-6">
-                <h2 className="font-bold mb-2">Выручка по городам (сегодня)</h2>
-                <div className="border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <h2 className="font-bold mb-2 text-gray-900">{t('admin.cityRevenue')}</h2>
+                <div className="border border-gray-200 rounded-lg overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-sm">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="p-2 text-left">Город</th>
-                        <th className="p-2 text-right">Выручка</th>
-                        <th className="p-2 text-right">Заказов</th>
+                        <th className="p-2 text-left text-gray-900">{t('admin.city')}</th>
+                        <th className="p-2 text-right text-gray-900">{t('admin.revenue')}</th>
+                        <th className="p-2 text-right text-gray-900">{t('admin.ordersCount')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {cityRevenues.map((r) => (
-                        <tr key={r.city_name} className="border-t">
-                          <td className="p-2">{r.city_name}</td>
-                          <td className="p-2 text-right">{formatMoney(r.revenue)} ₸</td>
-                          <td className="p-2 text-right">{r.order_count}</td>
+                        <tr key={r.city_name} className="border-t border-gray-200">
+                          <td className="p-2 text-gray-900">{r.city_name}</td>
+                          <td className="p-2 text-right text-gray-900">{formatMoney(r.revenue)} ₸</td>
+                          <td className="p-2 text-right text-gray-900">{r.order_count}</td>
                         </tr>
                       ))}
                       {cityRevenues.length === 0 && (
                         <tr>
-                          <td colSpan={3} className="p-2 text-gray-500">
-                            Нет данных за сегодня
+                            <td colSpan={3} className="p-2 text-gray-600">
+                            {t('admin.noDataToday')}
                           </td>
                         </tr>
                       )}
@@ -144,30 +179,30 @@ export default function AdminPage() {
               </div>
 
               <div className="mb-6">
-                <h2 className="font-bold mb-2">Низкий остаток</h2>
-                <div className="border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <h2 className="font-bold mb-2 text-gray-900">{t('admin.lowStock')}</h2>
+                <div className="border border-gray-200 rounded-lg overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-sm">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="p-2 text-left">Товар</th>
-                        <th className="p-2 text-left">Город</th>
-                        <th className="p-2 text-right">Остаток</th>
-                        <th className="p-2 text-right">Порог</th>
+                        <th className="p-2 text-left text-gray-900">{t('admin.product')}</th>
+                        <th className="p-2 text-left text-gray-900">{t('admin.city')}</th>
+                        <th className="p-2 text-right text-gray-900">{t('admin.stock')}</th>
+                        <th className="p-2 text-right text-gray-900">{t('admin.threshold')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {lowStock.slice(0, 20).map((s, i) => (
-                        <tr key={i} className="border-t">
-                          <td className="p-2">{s.product_name}</td>
-                          <td className="p-2">{s.city_name}</td>
+                        <tr key={i} className="border-t border-gray-200">
+                          <td className="p-2 text-gray-900">{s.product_name}</td>
+                          <td className="p-2 text-gray-900">{s.city_name}</td>
                           <td className="p-2 text-right text-red-600">{s.qty_on_hand}</td>
-                          <td className="p-2 text-right">{s.low_stock_threshold}</td>
+                          <td className="p-2 text-right text-gray-900">{s.low_stock_threshold}</td>
                         </tr>
                       ))}
                       {lowStock.length === 0 && (
                         <tr>
-                          <td colSpan={4} className="p-2 text-gray-500">
-                            Нет товаров с низким остатком
+                          <td colSpan={4} className="p-2 text-gray-600">
+                            {t('admin.noLowStock')}
                           </td>
                         </tr>
                       )}

@@ -14,8 +14,8 @@ export default function SignInPage() {
 
   useEffect(() => {
     const msg = searchParams.get('msg');
-    if (msg === 'session_expired' || msg === 'Сессия истекла') {
-      setError('Сессия истекла. Войдите снова.');
+    if (msg) {
+      setError(msg === 'session_expired' || msg === 'Сессия истекла' ? 'Сессия истекла. Войдите снова.' : msg);
     }
   }, [searchParams]);
 
@@ -67,7 +67,7 @@ export default function SignInPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gray-50">
       <div className="w-full max-w-sm bg-white rounded-xl shadow-lg p-6">
-        <h1 className="text-2xl font-bold text-center mb-6">Вход</h1>
+        <h1 className="text-2xl font-bold text-center mb-6 text-gray-900">Вход</h1>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -80,7 +80,7 @@ export default function SignInPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base text-gray-900 placeholder-gray-400 bg-white"
               placeholder="user@example.com"
             />
           </div>
@@ -94,7 +94,7 @@ export default function SignInPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base text-gray-900 placeholder-gray-400 bg-white"
             />
           </div>
           {error && (
@@ -109,7 +109,7 @@ export default function SignInPage() {
           </button>
         </form>
       </div>
-      <p className="mt-4 text-sm text-gray-500">
+      <p className="mt-4 text-sm text-gray-600">
         Продажи и склады по городам Казахстана
       </p>
     </div>

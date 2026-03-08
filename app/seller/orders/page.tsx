@@ -8,19 +8,31 @@ import NavSeller from '@/components/NavSeller';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/auth';
 import { isSessionError } from '@/lib/supabaseHelpers';
+import { useTranslation } from '@/lib/i18n';
+import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
+import { logAction } from '@/lib/actionLog';
 
 type OrderItemRow = {
+  id?: string;
   qty: number;
   price: number;
+  line_sum?: number;
+  is_gift?: boolean;
+  product_name_snapshot?: string;
   product: { name: string } | null;
 };
 
 type OrderRow = {
   id: string;
   created_at: string;
-  payment_type: string;
+  payment_type?: string | null;
   total_sum: number;
   status: string;
+  is_preorder?: boolean;
+  preorder_status?: string;
+  is_debt?: boolean;
+  debt_status?: string;
+  debt_payment_method?: string | null;
   order_items?: OrderItemRow[] | null;
 };
 
@@ -40,6 +52,8 @@ function formatDate(iso: string) {
 
 export default function SellerOrdersPage() {
   const { profile, authReady, signOut } = useAuth();
+  const { t } = useTranslation();
+  const ensureActive = useEnsureActiveDevice();
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedId = searchParams.get('id');
@@ -64,6 +78,11 @@ export default function SellerOrdersPage() {
     return from.toISOString();
   }
 
+  function isPreorderColumnError(err: { message?: string } | null): boolean {
+    const msg = String(err?.message ?? '');
+    return msg.includes('is_preorder') || msg.includes('does not exist');
+  }
+
   async function loadOrders() {
     if (!profile?.id) return;
     setLoading(true);
@@ -72,23 +91,38 @@ export default function SellerOrdersPage() {
       const fromIso = getFromDate(tab);
       const { data, error: e } = await supabase
         .from('orders')
-        .select('id, created_at, payment_type, total_sum, status')
+        .select('id, created_at, payment_type, total_sum, status, is_preorder, is_debt, debt_status, debt_payment_method')
         .eq('seller_id', profile.id)
         .gte('created_at', fromIso)
         .order('created_at', { ascending: false });
 
       if (e) {
         if (isSessionError(e)) {
-          signOut('Сессия истекла');
+          signOut(t('auth.sessionExpired'));
           return;
         }
-        setError(e.message);
-        setOrders([]);
+        if (isPreorderColumnError(e)) {
+          const { data: fallbackData, error: fallbackErr } = await supabase
+            .from('orders')
+            .select('id, created_at, payment_type, total_sum, status')
+            .eq('seller_id', profile.id)
+            .gte('created_at', fromIso)
+            .order('created_at', { ascending: false });
+          if (fallbackErr) {
+            setError(fallbackErr.message);
+            setOrders([]);
+          } else {
+            setOrders((fallbackData as OrderRow[]) ?? []);
+          }
+        } else {
+          setError(e.message);
+          setOrders([]);
+        }
         return;
       }
       setOrders((data as OrderRow[]) ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
+      setError(err instanceof Error ? err.message : t('orders.loadError'));
       setOrders([]);
     } finally {
       setLoading(false);
@@ -103,8 +137,8 @@ export default function SellerOrdersPage() {
         .from('orders')
         .select(
           `
-          id, created_at, payment_type, total_sum, status,
-          order_items:order_items ( qty, price, product:products ( name ) )
+          id, created_at, payment_type, total_sum, status, is_preorder, preorder_status, is_debt, debt_status, debt_payment_method,
+          order_items:order_items ( qty, price, line_sum, is_gift, product_name_snapshot, product:products ( name ) )
         `
         )
         .eq('id', id)
@@ -112,16 +146,35 @@ export default function SellerOrdersPage() {
 
       if (e) {
         if (isSessionError(e)) {
-          signOut('Сессия истекла');
+          signOut(t('auth.sessionExpired'));
           return;
         }
-        setError(e.message);
-        setOrderDetail(null);
+        if (isPreorderColumnError(e)) {
+          const { data: fallbackData, error: fallbackErr } = await supabase
+            .from('orders')
+            .select(
+              `
+              id, created_at, payment_type, total_sum, status,
+              order_items:order_items ( qty, price, line_sum, is_gift, product_name_snapshot, product:products ( name ) )
+            `
+            )
+            .eq('id', id)
+            .maybeSingle();
+          if (fallbackErr) {
+            setError(fallbackErr.message);
+            setOrderDetail(null);
+          } else {
+            setOrderDetail(((fallbackData as unknown) as OrderRow) ?? null);
+          }
+        } else {
+          setError(e.message);
+          setOrderDetail(null);
+        }
         return;
       }
       setOrderDetail(((data as unknown) as OrderRow) ?? null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
+      setError(err instanceof Error ? err.message : t('orders.loadError'));
       setOrderDetail(null);
     } finally {
       setDetailLoading(false);
@@ -155,18 +208,27 @@ export default function SellerOrdersPage() {
   }
 
   async function handleCancel(orderId: string) {
+    if (!(await ensureActive())) return;
     setCancelLoading(true);
     setError(null);
     try {
       const { error: e } = await supabase.rpc('cancel_order', { p_order_id: orderId });
       if (e) {
         if (isSessionError(e)) {
-          signOut('Сессия истекла');
+          signOut(t('auth.sessionExpired'));
           return;
         }
         setError(e.message);
         return;
       }
+      void logAction(supabase, {
+        user_id: profile?.id ?? null,
+        user_name: profile?.display_name ?? null,
+        user_role: profile?.role ?? 'seller',
+        action: 'order_cancel',
+        entity_type: 'order',
+        entity_id: orderId,
+      });
       await loadOrders();
       await loadOrderDetail(orderId);
     } finally {
@@ -178,45 +240,45 @@ export default function SellerOrdersPage() {
 
   return (
     <Protected role="seller">
-      <div className="min-h-screen pb-24 md:pb-4">
-        <div className="p-4">
-          <div className="flex items-center gap-2 mb-4">
-            <Link href="/seller" className="text-blue-600 font-medium">
-              ← Назад
+      <div className="min-h-screen pb-24 md:pb-4 w-full max-w-full overflow-x-hidden bg-white">
+        <div className="p-3 sm:p-4 w-full max-w-full min-w-0">
+          <div className="flex items-center gap-2 mb-3 sm:mb-4">
+            <Link href="/seller" className="text-blue-600 font-medium text-sm">
+              {t('common.back')}
             </Link>
           </div>
 
-          <h1 className="text-2xl font-bold mb-4">Мои заказы</h1>
+          <h1 className="text-lg sm:text-2xl font-bold mb-3 sm:mb-4 text-gray-900">{t('orders.title')}</h1>
 
-          <div className="flex gap-2 mb-4">
+          <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3 sm:mb-4">
             <button
               onClick={() => setTab('day')}
-              className={`px-4 py-2 rounded-lg ${tab === 'day' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+              className={`min-h-[44px] px-3 py-2 rounded-lg text-sm ${tab === 'day' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
             >
-              Сегодня
+              {t('orders.today')}
             </button>
             <button
               onClick={() => setTab('week')}
-              className={`px-4 py-2 rounded-lg ${tab === 'week' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+              className={`min-h-[44px] px-3 py-2 rounded-lg text-sm ${tab === 'week' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
             >
-              Неделя
+              {t('orders.week')}
             </button>
             <button
               onClick={() => setTab('month')}
-              className={`px-4 py-2 rounded-lg ${tab === 'month' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+              className={`min-h-[44px] px-3 py-2 rounded-lg text-sm ${tab === 'month' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
             >
-              Месяц
+              {t('orders.month')}
             </button>
           </div>
 
-          {error && <div className="mb-3 text-red-600">{error}</div>}
+          {error && <div className="mb-3 text-red-600 text-sm">{error}</div>}
 
           {loading ? (
-            <div>Загрузка...</div>
+            <div className="text-sm text-gray-900">{t('common.loading')}</div>
           ) : !profile ? (
-            <div>Нет профиля. Перезайди в аккаунт.</div>
+            <div className="text-sm text-gray-900">{t('common.noProfile')}</div>
           ) : orders.length === 0 ? (
-            <div>Нет заказов за выбранный период</div>
+            <div className="text-sm text-gray-600">{t('orders.noData')}</div>
           ) : (
             <div className="space-y-2">
               {orders.map((o) => (
@@ -226,20 +288,30 @@ export default function SellerOrdersPage() {
                   tabIndex={0}
                   onClick={() => openOrder(o.id)}
                   onKeyDown={(e) => e.key === 'Enter' && openOrder(o.id)}
-                  className="border rounded-xl p-4 bg-white cursor-pointer"
+                  className="border border-gray-200 rounded-xl p-3 sm:p-4 bg-white cursor-pointer w-full max-w-full min-w-0"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm text-gray-600">{formatDate(o.created_at)}</div>
-                      <div className="text-sm text-gray-500">{o.payment_type}</div>
-                      <div className="text-sm text-gray-700 mt-1">заказ на сумму {formatMoney(o.total_sum ?? 0)} ₸</div>
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs sm:text-sm text-gray-600">{formatDate(o.created_at)}</div>
+                      <div className="text-xs sm:text-sm text-gray-600">
+                        {o.debt_status === 'paid' && (o.payment_type === 'debt' || !o.payment_type) ? o.debt_payment_method ?? '—' : o.payment_type ?? '—'}
+                      </div>
+                      <div className="text-xs sm:text-sm text-gray-700 mt-1">{t('orders.orderOnAmount')} {formatMoney(o.total_sum ?? 0)} ₸</div>
                       {o.status === 'canceled' && (
                         <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded">
-                          Отменён
+                          {t('orders.canceled')}
+                        </span>
+                      )}
+                      {o.is_preorder === true && o.payment_type !== 'debt' && !o.is_debt && (
+                        <span className="inline-block mt-1 ml-1 text-xs text-gray-500">{t('orders.preorderBadge')}</span>
+                      )}
+                      {(o.is_debt === true || o.payment_type === 'debt') && (
+                        <span className="inline-block mt-1 ml-1 text-xs text-orange-600">
+                          {o.debt_status === 'paid' ? t('orders.debtBadgePaid') : t('orders.debtBadge')}
                         </span>
                       )}
                     </div>
-                    <div className="font-bold text-green-700 whitespace-nowrap">{formatMoney(o.total_sum ?? 0)} ₸</div>
+                    <div className="font-bold text-green-700 whitespace-nowrap text-sm sm:text-base shrink-0">{formatMoney(o.total_sum ?? 0)} ₸</div>
                   </div>
                 </div>
               ))}
@@ -247,48 +319,68 @@ export default function SellerOrdersPage() {
           )}
 
           {detailOpen && (
-            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4" onClick={closeDetail}>
-              <div className="bg-white rounded-2xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-3 sm:p-4 z-50" onClick={closeDetail}>
+              <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
                 {detailLoading ? (
-                  <div>Загрузка состава заказа...</div>
+                  <div className="text-sm">{t('orders.detailLoading')}</div>
                 ) : !orderDetail ? (
-                  <div className="text-red-600">Не удалось загрузить заказ</div>
+                  <div className="text-red-600 text-sm">{t('orders.loadFailed')}</div>
                 ) : (
                   <>
-                    <div className="text-xl font-bold mb-4">Заказ {formatDate(orderDetail.created_at)}</div>
+                    <div className="text-base sm:text-xl font-bold mb-3 sm:mb-4 text-gray-900">{t('common.order')} {formatDate(orderDetail.created_at)}</div>
                     {orderDetail.status === 'canceled' && (
                       <div className="mb-2">
-                        <span className="inline-block px-2 py-1 text-sm font-medium bg-red-100 text-red-700 rounded">
-                          Отменён
+                        <span className="inline-block px-2 py-1 text-xs sm:text-sm font-medium bg-red-100 text-red-700 rounded">
+                          {t('orders.canceled')}
                         </span>
                       </div>
                     )}
-                    <div className="mb-2">Сумма: {formatMoney(orderDetail.total_sum ?? 0)} ₸</div>
-                    <div className="mb-4">Оплата: {orderDetail.payment_type}</div>
+                    {orderDetail.is_preorder === true && !orderDetail.is_debt && orderDetail.payment_type !== 'debt' && (
+                      <div className="mb-2">
+                        <span className="inline-block px-2 py-1 text-xs sm:text-sm font-bold bg-amber-100 text-amber-800 rounded">
+                          {orderDetail.preorder_status === 'fulfilled' ? t('orders.preorderFulfilled') : t('orders.preorder')}
+                        </span>
+                      </div>
+                    )}
+                    {(orderDetail.is_debt === true || orderDetail.payment_type === 'debt') && (
+                      <div className="mb-2">
+                        <span className="inline-block px-2 py-1 text-xs sm:text-sm font-bold bg-orange-100 text-orange-800 rounded">
+                          {orderDetail.debt_status === 'paid' ? t('orders.debtPaid') : t('orders.debt')}
+                        </span>
+                      </div>
+                    )}
+                    <div className="mb-2 text-sm text-gray-900">{t('common.amountLabel')}: {formatMoney(orderDetail.total_sum ?? 0)} ₸</div>
+                    <div className="mb-4 text-sm text-gray-900">
+                      {t('common.payment')}:{' '}
+                      {orderDetail.debt_status === 'paid' && (orderDetail.payment_type === 'debt' || !orderDetail.payment_type)
+                        ? orderDetail.debt_payment_method ?? '—'
+                        : orderDetail.payment_type ?? '—'}
+                    </div>
                     <div className="space-y-2 mb-4">
                       {items.length > 0 ? (
                         items.map((it, idx) => (
-                          <div key={idx} className="text-sm">
-                            {it.product?.name ?? 'Товар'} × {it.qty} = {formatMoney((it.price ?? 0) * (it.qty ?? 0))} ₸
+                          <div key={idx} className="text-xs sm:text-sm text-gray-900">
+                            {it.product?.name ?? it.product_name_snapshot ?? t('common.product')} × {it.qty}
+                            {it.is_gift ? ` ${t('common.gift')}` : ` = ${formatMoney((it.line_sum ?? (it.price ?? 0) * (it.qty ?? 0)))} ₸`}
                           </div>
                         ))
                       ) : (
-                        <div className="text-gray-500 text-sm">Нет позиций в составе</div>
+                        <div className="text-gray-600 text-xs sm:text-sm">{t('common.noItems')}</div>
                       )}
                     </div>
                     {orderDetail.status !== 'canceled' && (
                       <button
                         onClick={() => handleCancel(orderDetail.id)}
                         disabled={cancelLoading}
-                        className="w-full py-3 rounded-lg bg-red-600 text-white font-bold disabled:opacity-60"
+                        className="w-full py-3 rounded-lg bg-red-600 text-white font-bold disabled:opacity-60 min-h-[48px] text-sm"
                       >
-                        {cancelLoading ? 'Отмена...' : 'Отменить заказ'}
+                        {cancelLoading ? t('common.canceling') : t('common.cancelOrder')}
                       </button>
                     )}
                   </>
                 )}
-                <button onClick={closeDetail} className="w-full py-3 rounded-lg bg-gray-200 mt-2">
-                  Закрыть
+                <button onClick={closeDetail} className="w-full py-3 rounded-lg bg-gray-200 mt-2 min-h-[48px] text-sm">
+                  {t('common.close')}
                 </button>
               </div>
             </div>

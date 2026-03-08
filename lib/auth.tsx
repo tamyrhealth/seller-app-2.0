@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import type { Profile } from '@/lib/types';
+import { syncActiveSession } from '@/lib/activeSession';
+import { getOrCreateDeviceId } from '@/lib/deviceId';
 
 const DEV = process.env.NODE_ENV === 'development';
 
@@ -61,6 +63,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const p = await loadProfile(u.id);
       safeSet(setProfile, p);
       if (DEV) console.log('[auth] profile loaded', !!p);
+      if (p?.is_active !== false) {
+        const deviceId = getOrCreateDeviceId();
+        if (deviceId) void syncActiveSession(u.id, deviceId);
+      }
     } catch (err) {
       if (DEV) console.log('[auth] refreshProfile error', err);
       safeSet(setProfile, null);
