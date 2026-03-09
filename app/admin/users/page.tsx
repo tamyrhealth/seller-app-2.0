@@ -269,7 +269,7 @@ export default function AdminUsersPage() {
                         display_name: p.display_name || '',
                         role: p.role,
                         city_id: p.city_id || '',
-                        is_active: p.is_active,
+                        is_active: p.is_active ?? true,
                       });
                     }}
                     className="px-3 py-1 bg-blue-600 text-white rounded text-sm"

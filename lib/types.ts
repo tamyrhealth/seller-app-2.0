@@ -19,8 +19,12 @@ export type PaymentType = 'cash' | 'kaspi' | 'card' | 'transfer' | 'debt';
 export type Product = {
   id: string;
   name: string;
+  category?: string | null;
+  unit: string;
   price_retail: number;
   is_active: boolean;
+  created_at?: string | null;
+  sort_order?: number | null;
 };
 
 export type PreorderStatus = 'pending' | 'fulfilled' | 'cancelled';

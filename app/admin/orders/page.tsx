@@ -118,7 +118,7 @@ export default function AdminOrdersPage() {
     }
     (async () => {
       const baseSelect = 'id, created_at, total_sum, status, payment_type, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at, debt_payment_method';
-      const addFilters = (q: ReturnType<typeof supabase.from>) => {
+      const addFilters = (q: any) => {
         let r = q.select(baseSelect);
         if (filterCity?.trim()) r = r.eq('city_id', filterCity);
         if (filterSeller?.trim()) r = r.eq('seller_id', filterSeller);
@@ -176,7 +176,7 @@ export default function AdminOrdersPage() {
       const fromISO = from.toISOString();
       const toNextISO = toNext.toISOString();
 
-      const applyFilters = (q: ReturnType<typeof supabase.from>) => {
+      const applyFilters = (q: any) => {
         if (filterCity?.trim()) q = q.eq('city_id', filterCity);
         if (filterSeller?.trim()) q = q.eq('seller_id', filterSeller);
         if (filterStatus?.trim()) q = q.eq('status', filterStatus);
@@ -602,7 +602,7 @@ export default function AdminOrdersPage() {
                 <tbody>
                   {orders.map((o) => (
                     <tr key={o.id} className="border-t border-gray-200">
-                      <td className="p-2 whitespace-nowrap text-gray-900">{formatDate(getAccountingDate(o) ?? o.created_at)}</td>
+                      <td className="p-2 whitespace-nowrap text-gray-900">{formatDate(String(getAccountingDate(o) ?? o.created_at))}</td>
                       <td className="p-2 whitespace-nowrap text-gray-900">{cityMap.get(o.city_id) || o.city_id}</td>
                       <td className="p-2 whitespace-nowrap text-gray-900">{sellerMap.get(o.seller_id) || o.seller_id}</td>
                       <td className="p-2 text-right whitespace-nowrap text-gray-900">{formatMoney(o.total_sum)} ₸</td>

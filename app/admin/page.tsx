@@ -107,8 +107,8 @@ export default function AdminPage() {
 
       const low: LowStockItem[] = [];
       for (const i of invData || []) {
-        const p = i.products as { name: string } | null;
-        const c = i.cities as { name: string } | null;
+        const p = (Array.isArray(i.products) ? i.products[0] ?? null : i.products) as { name: string } | null;
+        const c = (Array.isArray(i.cities) ? i.cities[0] ?? null : i.cities) as { name: string } | null;
         if (i.qty_on_hand <= i.low_stock_threshold) {
           low.push({
             product_name: p?.name ?? '',

@@ -68,19 +68,19 @@ export default function SellerPreordersPage() {
         .neq('status', 'canceled')
         .order('created_at', { ascending: false });
       if (filterPreorderStatus) q = q.eq('preorder_status', filterPreorderStatus);
-      const { data, err } = await q;
+      const { data, error } = await q;
       if (cancelled) return;
-      if (err) {
-        if (isSessionError(err)) {
+      if (error) {
+        if (isSessionError(error)) {
           signOut(t('auth.sessionExpired'));
           return;
         }
-        if (isPreorderColumnError(err)) {
+        if (isPreorderColumnError(error)) {
           setPreorderColumnsMissing(true);
           setOrders([]);
           setError(null);
         } else {
-          setError(err.message);
+          setError(error.message);
           setOrders([]);
         }
       } else {
