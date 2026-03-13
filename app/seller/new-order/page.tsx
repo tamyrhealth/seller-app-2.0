@@ -96,7 +96,9 @@ export default function NewOrderPage() {
         rows.sort((a, b) => {
           const aOrder = a.sort_order ?? Number.POSITIVE_INFINITY;
           const bOrder = b.sort_order ?? Number.POSITIVE_INFINITY;
-          return aOrder - bOrder;
+
+          if (aOrder !== bOrder) return aOrder - bOrder;
+          return (a.name || '').localeCompare(b.name || '');
         });
         setProducts(rows);
       } catch (err) {
