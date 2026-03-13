@@ -70,7 +70,7 @@ export default function NewOrderPage() {
       try {
         const { data, error: qErr } = await supabase
           .from('inventory')
-          .select('product_id, qty_on_hand, products(id, name, category, unit, price_retail, is_active)')
+          .select('product_id, qty_on_hand, products(id, name, category, unit, price_retail, is_active, sort_order)')
           .eq('city_id', cityId)
           .gt('qty_on_hand', 0);
         if (cancelled) return;
@@ -93,7 +93,11 @@ export default function NewOrderPage() {
             });
           }
         }
-        rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        rows.sort((a, b) => {
+          const aOrder = a.sort_order ?? Number.POSITIVE_INFINITY;
+          const bOrder = b.sort_order ?? Number.POSITIVE_INFINITY;
+          return aOrder - bOrder;
+        });
         setProducts(rows);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : t('common.errorLoad'));
