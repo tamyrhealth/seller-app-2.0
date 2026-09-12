@@ -17,6 +17,23 @@ function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
 }
 
+function hasMoreThan3Decimals(n: number) {
+  const s = String(n);
+  const dot = s.indexOf('.');
+  if (dot === -1) return false;
+  return s.slice(dot + 1).replace(/0+$/, '').length > 3;
+}
+
+function qtyValidationError(qty: number, unit: string | null | undefined): string | null {
+  if (isNaN(qty) || qty <= 0) return 'Введите корректное количество';
+  if (unit === 'kg') {
+    if (hasMoreThan3Decimals(qty)) return 'Для кг допускается не больше 3 знаков после запятой';
+    return null;
+  }
+  if (!Number.isInteger(qty)) return 'Для этого товара количество должно быть целым';
+  return null;
+}
+
 interface CartItem {
   product_id: string;
   product_name: string;
@@ -24,6 +41,7 @@ interface CartItem {
   qty: number;
   customPrice: string;
   qty_on_hand: number;
+  unit: string;
 }
 
 export default function NewOrderPage() {
@@ -133,6 +151,7 @@ export default function NewOrderPage() {
           qty: 1,
           customPrice: '',
           qty_on_hand: isPreorder ? maxQty : qty,
+          unit: p.unit,
         },
       ]);
     }
@@ -188,6 +207,13 @@ export default function NewOrderPage() {
       const over = cart.find((c) => (c.qty ?? 0) > c.qty_on_hand);
       if (over) {
         setError(t('newOrder.insufficientStock'));
+        return;
+      }
+    }
+    for (const item of cart) {
+      const qtyErr = qtyValidationError(item.qty ?? 0, item.unit);
+      if (qtyErr) {
+        setError(`${item.product_name}: ${qtyErr}`);
         return;
       }
     }
@@ -352,6 +378,7 @@ export default function NewOrderPage() {
               <div className="space-y-2 sm:space-y-3">
                 {cart.map((item) => {
                   const qty = item.qty ?? 0;
+                  const isKg = item.unit === 'kg';
                   return (
                     <div
                       key={item.product_id}
@@ -366,7 +393,34 @@ export default function NewOrderPage() {
                         >
                           −
                         </button>
-                        <span className="min-w-[2.5rem] text-center text-sm font-medium tabular-nums text-gray-900">{qty}</span>
+                        <input
+                          type="number"
+                          step={isKg ? '0.001' : '1'}
+                          min={isKg ? '0.001' : '1'}
+                          value={qty === 0 ? '' : qty}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (!v) {
+                              setCart((prev) =>
+                                prev.map((c) => (c.product_id === item.product_id ? { ...c, qty: 0 } : c))
+                              );
+                              return;
+                            }
+                            const n = Number(v);
+                            if (isNaN(n) || n < 0) return;
+                            if (!isKg && !Number.isInteger(n)) return;
+                            if (isKg && hasMoreThan3Decimals(n)) return;
+                            const maxTotal = isPreorder ? 999 : item.qty_on_hand;
+                            setCart((prev) =>
+                              prev.map((c) =>
+                                c.product_id === item.product_id
+                                  ? { ...c, qty: Math.min(maxTotal, n) }
+                                  : c
+                              )
+                            );
+                          }}
+                          className="min-w-[3.5rem] w-16 text-center text-sm font-medium tabular-nums text-gray-900 border border-gray-300 rounded-lg px-2 py-2 min-h-[40px] bg-white"
+                        />
                         <button
                           type="button"
                           onClick={() => updateCartQty(item.product_id, 1)}

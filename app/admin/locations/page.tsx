@@ -46,6 +46,28 @@ export default function AdminLocationsPage() {
     return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
   }
 
+  function hasMoreThan3Decimals(n: number) {
+    const s = String(n);
+    const dot = s.indexOf('.');
+    if (dot === -1) return false;
+    return s.slice(dot + 1).replace(/0+$/, '').length > 3;
+  }
+
+  function qtyValidationError(qty: number, unit: string | null | undefined, opts?: { allowZero?: boolean }): string | null {
+    if (isNaN(qty)) return 'Введите корректное количество';
+    if (opts?.allowZero) {
+      if (qty < 0) return 'Введите корректное количество';
+    } else if (qty <= 0) {
+      return 'Введите корректное количество';
+    }
+    if (unit === 'kg') {
+      if (hasMoreThan3Decimals(qty)) return 'Для кг допускается не больше 3 знаков после запятой';
+      return null;
+    }
+    if (!Number.isInteger(qty)) return 'Для этого товара количество должно быть целым';
+    return null;
+  }
+
   useEffect(() => {
     loadCities();
     supabase.from('products').select('*').eq('is_active', true).then(({ data }) => setProducts(data || []));
@@ -143,9 +165,12 @@ export default function AdminLocationsPage() {
   }
 
   async function handleRestock() {
-    const qty = parseInt(restockForm.qty_add, 10);
-    if (!restockForm.city_id || !restockForm.product_id || isNaN(qty) || qty <= 0) {
-      alert('Введите корректное количество');
+    const product = products.find((p) => p.id === restockForm.product_id);
+    const unit = product?.unit;
+    const qty = Number(restockForm.qty_add);
+    const qtyErr = qtyValidationError(qty, unit);
+    if (!restockForm.city_id || !restockForm.product_id || qtyErr) {
+      alert(qtyErr || 'Введите корректное количество');
       return;
     }
 
@@ -212,8 +237,14 @@ export default function AdminLocationsPage() {
 
   async function handleAdjust() {
     if (!adjustRow || !selectedCity) return;
-    const newQty = parseInt(adjustForm.new_qty, 10);
-    if (isNaN(newQty) || newQty < 0) return;
+    const product = products.find((p) => p.id === adjustRow.product_id);
+    const unit = product?.unit;
+    const newQty = Number(adjustForm.new_qty);
+    const qtyErr = qtyValidationError(newQty, unit, { allowZero: true });
+    if (qtyErr) {
+      alert(qtyErr);
+      return;
+    }
 
     const delta = newQty - adjustRow.qty_on_hand;
     const res = await supabase.auth.getUser() as unknown as { data?: { user?: { id?: string } }; user?: { id?: string } };
@@ -343,6 +374,8 @@ export default function AdminLocationsPage() {
               <input
                 type="number"
                 placeholder="Количество"
+                step={products.find((p) => p.id === restockForm.product_id)?.unit === 'kg' ? '0.001' : '1'}
+                min={products.find((p) => p.id === restockForm.product_id)?.unit === 'kg' ? '0.001' : '1'}
                 value={restockForm.qty_add}
                 onChange={(e) => setRestockForm({ ...restockForm, qty_add: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
@@ -464,6 +497,8 @@ export default function AdminLocationsPage() {
                 <h2 className="font-bold mb-2 text-gray-900">Корректировка: {adjustRow.product_name}</h2>
                 <input
                   type="number"
+                  step={products.find((p) => p.id === adjustRow.product_id)?.unit === 'kg' ? '0.001' : '1'}
+                  min="0"
                   value={adjustForm.new_qty}
                   onChange={(e) => setAdjustForm({ new_qty: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded mb-4 bg-white text-gray-900"

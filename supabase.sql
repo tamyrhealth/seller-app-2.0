@@ -68,14 +68,13 @@ CREATE TABLE IF NOT EXISTS orders (
   debt_note text
 );
 
--- 6) order_items
 CREATE TABLE IF NOT EXISTS order_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   product_id uuid NOT NULL REFERENCES products(id),
   product_name_snapshot text NOT NULL,
   price numeric(12,2) NOT NULL,
-  qty integer NOT NULL,
+  qty numeric(12,3) NOT NULL,
   line_sum numeric(12,2) NOT NULL
 );
 
@@ -268,9 +267,9 @@ DECLARE
   v_total numeric := 0;
   v_product_name text;
   v_price numeric;
-  v_qty int;
+  v_qty numeric;
   v_line_sum numeric;
-  v_current_qty int;
+  v_current_qty numeric;
   v_is_debt boolean;
 BEGIN
   v_seller_id := auth.uid();
@@ -307,13 +306,16 @@ BEGIN
     LOOP
       SELECT qty_on_hand INTO v_current_qty FROM inventory
       WHERE city_id = v_city_id AND product_id = (v_item->>'product_id')::uuid;
-      IF v_current_qty IS NULL OR v_current_qty < (v_item->>'qty')::int THEN
+      IF v_current_qty IS NULL OR v_current_qty < (v_item->>'qty')::numeric THEN
         RAISE EXCEPTION 'Insufficient stock for product %', v_item->>'product_id';
       END IF;
     END LOOP;
   END IF;
 
-  v_is_debt := (payload->>'is_debt' = 'true' OR (payload->'is_debt')::text = 'true');
+  v_is_debt := COALESCE(
+  (payload->>'is_debt' = 'true' OR (payload->'is_debt')::text = 'true'),
+  false
+);
   IF v_is_debt AND (NULLIF(trim(COALESCE(payload->>'debt_customer_phone', '')), '') IS NULL) THEN
     RAISE EXCEPTION 'Phone required for debt orders';
   END IF;
@@ -353,7 +355,7 @@ BEGIN
     SELECT name, price_retail INTO v_product_name, v_price
     FROM products WHERE id = (v_item->>'product_id')::uuid;
 
-    v_qty := (v_item->>'qty')::int;
+    v_qty := (v_item->>'qty')::numeric;
     IF (v_item->>'price') IS NOT NULL AND (v_item->>'price') != '' THEN
       v_price := (v_item->>'price')::numeric;
     END IF;
