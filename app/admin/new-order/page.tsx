@@ -39,6 +39,7 @@ interface SellerOption {
   display_name: string | null;
   city_id: string | null;
   city_name: string | null;
+  city_is_active: boolean;
 }
 
 interface CartItem {
@@ -92,7 +93,7 @@ export default function AdminNewOrderPage() {
     (async () => {
       const { data, error: sellersError } = await supabase
         .from('profiles')
-        .select('id, display_name, city_id, is_active, cities(name)')
+        .select('id, display_name, city_id, is_active, cities(name, is_active)')
         .eq('role', 'seller')
         .eq('is_active', true)
         .order('display_name');
@@ -107,13 +108,14 @@ export default function AdminNewOrderPage() {
       } else {
         setSellers(
           (data || []).map((row) => {
-            const city = row.cities as { name?: string } | { name?: string }[] | null;
+            const city = row.cities as { name?: string; is_active?: boolean } | { name?: string; is_active?: boolean }[] | null;
             const cityRow = Array.isArray(city) ? city[0] : city;
             return {
               id: row.id,
               display_name: row.display_name,
               city_id: row.city_id,
               city_name: cityRow?.name ?? null,
+              city_is_active: cityRow?.is_active !== false,
             };
           })
         );
@@ -247,6 +249,7 @@ export default function AdminNewOrderPage() {
     !!profile?.id &&
     !!selectedSeller?.id &&
     !!cityId &&
+    selectedSeller.city_is_active !== false &&
     (isPreorder || isDebt || cart.every((c) => (c.qty ?? 0) <= c.qty_on_hand)) &&
     (orderType === 'ordinary' || orderType === 'preorder' ? !!paymentType : true) &&
     (orderType !== 'debt' || debtCustomerPhone.trim() !== '');
@@ -410,6 +413,9 @@ export default function AdminNewOrderPage() {
             </select>
             {selectedSeller && !selectedSeller.city_id && (
               <p className="mt-2 text-sm text-red-600">У этого продавца не указан город. Создание заказа невозможно.</p>
+            )}
+            {selectedSeller && selectedSeller.city_id && selectedSeller.city_is_active === false && (
+              <p className="mt-2 text-sm text-red-600">Город этого продавца скрыт. Создание заказа невозможно, пока город не восстановят.</p>
             )}
           </div>
 

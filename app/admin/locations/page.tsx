@@ -89,7 +89,7 @@ export default function AdminLocationsPage() {
     } else {
       loadInventory(selectedCity);
     }
-  }, [selectedCity]);
+  }, [selectedCity, cities]);
 
   async function loadCities() {
     const { data } = await supabase.from('cities').select('*').order('name');
@@ -100,11 +100,13 @@ export default function AdminLocationsPage() {
   async function loadInventoryAll() {
     const { data } = await supabase
       .from('inventory')
-      .select('product_id, qty_on_hand, products(name)');
+      .select('city_id, product_id, qty_on_hand, products(name)');
 
+    const activeCityIds = new Set(cities.filter((c) => c.is_active !== false).map((c) => c.id));
     const map = new Map<string, { product_name: string; qty_on_hand: number }>();
 
     for (const row of data || []) {
+      if (cities.length > 0 && !activeCityIds.has(row.city_id as string)) continue;
       const pid = row.product_id as string;
       const products = row.products as { name?: string } | { name?: string }[] | null;
       const name = Array.isArray(products) ? products[0]?.name ?? '' : products?.name ?? '';
@@ -172,7 +174,7 @@ export default function AdminLocationsPage() {
 
   async function hideCity(city: City) {
     setCityActionError(null);
-    const [{ count: activeSellers }, { data: pendingPreorders }, { data: activeDebts }] = await Promise.all([
+    const [sellersRes, preordersRes, debtsRes] = await Promise.all([
       supabase
         .from('profiles')
         .select('id', { count: 'exact', head: true })
@@ -194,6 +196,18 @@ export default function AdminLocationsPage() {
         .eq('debt_status', 'active')
         .limit(1),
     ]);
+
+    const checkError = sellersRes.error || preordersRes.error || debtsRes.error;
+    if (checkError) {
+      setCityActionError(
+        `Нельзя скрыть «${city.name}»: не удалось проверить активных продавцов, предзаказы или долги (${checkError.message}). Город не изменён.`
+      );
+      return;
+    }
+
+    const activeSellers = sellersRes.count;
+    const pendingPreorders = preordersRes.data;
+    const activeDebts = debtsRes.data;
 
     const blockers: string[] = [];
     if ((activeSellers ?? 0) > 0) {
@@ -238,6 +252,10 @@ export default function AdminLocationsPage() {
     const qtyErr = qtyValidationError(qty, unit);
     if (!restockForm.city_id || !restockForm.product_id || qtyErr) {
       alert(qtyErr || 'Введите корректное количество');
+      return;
+    }
+    if (!activeCities.some((c) => c.id === restockForm.city_id)) {
+      alert('Приход возможен только в активный город');
       return;
     }
 
@@ -481,7 +499,7 @@ export default function AdminLocationsPage() {
             >
               Весь КЗ
             </button>
-            {cities.map((c) => (
+            {activeCities.map((c) => (
               <div key={c.id} className="flex items-center gap-1">
                 <button
                   onClick={() => setSelectedCity(c.id)}
@@ -492,6 +510,7 @@ export default function AdminLocationsPage() {
                   {c.name}
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     setEditCityId(c.id);
                     setCityForm({ name: c.name, address: c.address || '' });
@@ -502,8 +521,60 @@ export default function AdminLocationsPage() {
                 >
                   ✎
                 </button>
+                <button
+                  type="button"
+                  onClick={() => hideCity(c)}
+                  className="px-2 py-1 bg-orange-100 text-orange-800 rounded text-sm"
+                  title="Скрыть город"
+                >
+                  Скрыть
+                </button>
               </div>
             ))}
+          </div>
+
+          <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => setShowHiddenCities((v) => !v)}
+              className="px-3 py-2 text-sm rounded-lg bg-gray-100 text-gray-800 border border-gray-300"
+            >
+              {showHiddenCities
+                ? 'Скрыть список неактивных городов'
+                : `Показать скрытые города (${hiddenCities.length})`}
+            </button>
+            {showHiddenCities && (
+              <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-gray-50">
+                <p className="text-sm font-medium text-gray-900 mb-2">Скрытые города</p>
+                {hiddenCities.length === 0 ? (
+                  <p className="text-sm text-gray-600">Нет скрытых городов.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {hiddenCities.map((c) => (
+                      <div key={c.id} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCity(c.id)}
+                          className={`px-3 py-2 rounded-lg text-sm whitespace-nowrap ${
+                            selectedCity === c.id ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+                          }`}
+                          title="Посмотреть остатки без восстановления"
+                        >
+                          {c.name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => restoreCity(c)}
+                          className="px-2 py-1 bg-green-600 text-white rounded text-sm"
+                        >
+                          Восстановить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {selectedCity && (
@@ -529,11 +600,15 @@ export default function AdminLocationsPage() {
                           : ''}
                       </p>
                     </div>
-                    {selectedCity === 'ALL' ? (
+                    {selectedCity === 'ALL' || hiddenCities.some((c) => c.id === selectedCity) ? (
                       <button
                         disabled
                         className="px-3 py-1 bg-gray-300 text-gray-600 rounded text-sm cursor-not-allowed"
-                        title="Корректировка доступна только для конкретного города"
+                        title={
+                          selectedCity === 'ALL'
+                            ? 'Корректировка доступна только для конкретного города'
+                            : 'Сначала восстановите город'
+                        }
                       >
                         Корректировка
                       </button>

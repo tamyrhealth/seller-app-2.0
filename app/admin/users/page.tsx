@@ -97,6 +97,14 @@ export default function AdminUsersPage() {
   }
 
   const cityMap = new Map(cities.map((c) => [c.id, c.name]));
+  const activeCities = cities.filter((c) => c.is_active !== false);
+  function citiesForSelect(currentCityId?: string | null) {
+    if (currentCityId && !activeCities.some((c) => c.id === currentCityId)) {
+      const current = cities.find((c) => c.id === currentCityId);
+      return current ? [...activeCities, current] : activeCities;
+    }
+    return activeCities;
+  }
 
   return (
     <Protected role="admin">
@@ -157,7 +165,7 @@ export default function AdminUsersPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="">Без города</option>
-                {cities.map((c) => (
+                {citiesForSelect().map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>
@@ -213,9 +221,9 @@ export default function AdminUsersPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="">Без города</option>
-                {cities.map((c) => (
+                {citiesForSelect(editForm.city_id).map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {c.name}{c.is_active === false ? ' (скрыт)' : ''}
                   </option>
                 ))}
               </select>
