@@ -4,6 +4,7 @@ export type City = {
   id: string;
   name: string;
   address?: string | null;
+  is_active?: boolean;
 };
 
 export type Profile = {

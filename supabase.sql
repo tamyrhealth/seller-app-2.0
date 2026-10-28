@@ -7,8 +7,10 @@ CREATE TABLE IF NOT EXISTS cities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text UNIQUE NOT NULL,
   address text,
+  is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz DEFAULT now()
 );
+ALTER TABLE cities ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
 
 -- 2) profiles (references auth.users)
 CREATE TABLE IF NOT EXISTS profiles (

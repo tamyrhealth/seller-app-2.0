@@ -33,6 +33,12 @@ export default function AdminLocationsPage() {
   });
   const [adjustForm, setAdjustForm] = useState({ new_qty: '' });
   const [products, setProducts] = useState<Product[]>([]);
+  const [showHiddenCities, setShowHiddenCities] = useState(false);
+  const [cityActionError, setCityActionError] = useState<string | null>(null);
+
+  const isCityActive = (c: City) => c.is_active !== false;
+  const activeCities = useMemo(() => cities.filter(isCityActive), [cities]);
+  const hiddenCities = useMemo(() => cities.filter((c) => !isCityActive(c)), [cities]);
 
   const priceByProductId = useMemo(() => {
     const map = new Map<string, number>();
@@ -164,6 +170,67 @@ export default function AdminLocationsPage() {
     loadCities();
   }
 
+  async function hideCity(city: City) {
+    setCityActionError(null);
+    const [{ count: activeSellers }, { data: pendingPreorders }, { data: activeDebts }] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('city_id', city.id)
+        .eq('role', 'seller')
+        .eq('is_active', true),
+      supabase
+        .from('orders')
+        .select('id')
+        .eq('city_id', city.id)
+        .eq('is_preorder', true)
+        .eq('preorder_status', 'pending')
+        .neq('status', 'canceled')
+        .limit(1),
+      supabase
+        .from('orders')
+        .select('id')
+        .eq('city_id', city.id)
+        .eq('debt_status', 'active')
+        .limit(1),
+    ]);
+
+    const blockers: string[] = [];
+    if ((activeSellers ?? 0) > 0) {
+      blockers.push(`активных продавцов: ${activeSellers}`);
+    }
+    if (pendingPreorders && pendingPreorders.length > 0) {
+      blockers.push('есть незавершённые предзаказы');
+    }
+    if (activeDebts && activeDebts.length > 0) {
+      blockers.push('есть активные долги');
+    }
+    if (blockers.length > 0) {
+      setCityActionError(
+        `Нельзя скрыть «${city.name}»: ${blockers.join('; ')}. Сначала переведите продавцов в другой город и закройте незавершённые заказы. История заказов и склад не удаляются.`
+      );
+      return;
+    }
+
+    const { error } = await supabase.from('cities').update({ is_active: false }).eq('id', city.id);
+    if (error) {
+      setCityActionError(error.message);
+      return;
+    }
+    if (selectedCity === city.id) setSelectedCity('ALL');
+    loadCities();
+  }
+
+  async function restoreCity(city: City) {
+    setCityActionError(null);
+    const { error } = await supabase.from('cities').update({ is_active: true }).eq('id', city.id);
+    if (error) {
+      setCityActionError(error.message);
+      return;
+    }
+    loadCities();
+  }
+
   async function handleRestock() {
     const product = products.find((p) => p.id === restockForm.product_id);
     const unit = product?.unit;
@@ -290,8 +357,12 @@ export default function AdminLocationsPage() {
             <button
               onClick={() => {
                 setShowRestock(true);
+                const restockCity =
+                  selectedCity && selectedCity !== 'ALL' && activeCities.some((c) => c.id === selectedCity)
+                    ? selectedCity
+                    : '';
                 setRestockForm({
-                  city_id: selectedCity || '',
+                  city_id: restockCity,
                   product_id: '',
                   qty_add: '',
                 });
@@ -309,6 +380,10 @@ export default function AdminLocationsPage() {
               Весь КЗ
             </button>
           </div>
+
+          {cityActionError && (
+            <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm">{cityActionError}</div>
+          )}
 
           {showCityForm && (
             <div className="bg-gray-100 rounded-lg p-4 mb-4">
@@ -353,7 +428,7 @@ export default function AdminLocationsPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="">Выберите город</option>
-                {cities.map((c) => (
+                {activeCities.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>
