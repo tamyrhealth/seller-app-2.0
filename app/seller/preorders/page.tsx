@@ -5,12 +5,11 @@ import Link from 'next/link';
 import Protected from '@/components/Protected';
 import NavSeller from '@/components/NavSeller';
 import { supabase } from '@/lib/supabaseClient';
-import { fulfillPreorder } from '@/lib/fulfillPreorder';
 import { useAuth } from '@/lib/auth';
 import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
-import { logAction } from '@/lib/actionLog';
+import { displayOrderNumber } from '@/lib/orderNumber';
 import type { Order, PreorderStatus } from '@/lib/types';
 import type { City } from '@/lib/types';
 
@@ -111,47 +110,12 @@ export default function SellerPreordersPage() {
     setFulfillingId(orderId);
     setError(null);
     const { error: rpcError } = await supabase.rpc('fulfill_preorder', { p_order_id: orderId });
+    setFulfillingId(null);
     if (rpcError) {
-      if (rpcError.message?.includes('Could not find the function') || rpcError.message?.includes('not find')) {
-        const result = await fulfillPreorder(supabase, orderId, profile.id);
-        setFulfillingId(null);
-        if (result.success) {
-          void logAction(supabase, {
-            user_id: profile?.id ?? null,
-            user_name: profile?.display_name ?? null,
-            user_role: profile?.role ?? 'seller',
-            action: 'preorder_fulfill',
-            entity_type: 'order',
-            entity_id: orderId,
-          });
-          const now = new Date().toISOString();
-          setOrders((prev) =>
-            prev.map((o) =>
-              o.id === orderId ? { ...o, preorder_status: 'fulfilled' as const, fulfilled_at: now } : o
-            )
-          );
-          if (orderDetail?.id === orderId)
-            setOrderDetail((d) => (d ? { ...d, preorder_status: 'fulfilled', fulfilled_at: now } : null));
-          alert('Выдано');
-          return;
-        }
-        setError(result.error ?? 'Недостаточно остатков на складе');
-        return;
-      }
-      setFulfillingId(null);
       setError(rpcError.message?.includes('Insufficient') ? 'Недостаточно остатков на складе' : rpcError.message);
       return;
     }
-    setFulfillingId(null);
     const now = new Date().toISOString();
-    void logAction(supabase, {
-      user_id: profile?.id ?? null,
-      user_name: profile?.display_name ?? null,
-      user_role: profile?.role ?? 'seller',
-      action: 'preorder_fulfill',
-      entity_type: 'order',
-      entity_id: orderId,
-    });
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId ? { ...o, preorder_status: 'fulfilled' as const, fulfilled_at: now } : o
@@ -305,7 +269,7 @@ export default function SellerPreordersPage() {
                 className="bg-white rounded-xl p-4 sm:p-6 max-w-md w-full max-h-[85vh] overflow-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <h2 className="font-bold mb-2 text-sm sm:text-base">{t('preorders.modalTitle')} {orderDetail.id.slice(0, 8)}</h2>
+                <h2 className="font-bold mb-2 text-sm sm:text-base">{t('preorders.modalTitle')} {displayOrderNumber(orderDetail)}</h2>
                 <div className="mb-2">
                   <span className="inline-block px-2 py-1 text-xs sm:text-sm font-bold bg-amber-100 text-amber-800 rounded">
                     {(orderDetail.preorder_status ?? '') === 'fulfilled' ? t('orders.preorderFulfilled') : t('orders.preorder')}

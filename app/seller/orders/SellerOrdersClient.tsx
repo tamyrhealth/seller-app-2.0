@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/auth';
 import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
-import { logAction } from '@/lib/actionLog';
+import { displayOrderNumber } from '@/lib/orderNumber';
 
 type OrderItemRow = {
   id?: string;
@@ -24,6 +24,7 @@ type OrderItemRow = {
 
 type OrderRow = {
   id: string;
+  order_number?: string | null;
   created_at: string;
   payment_type?: string | null;
   total_sum: number;
@@ -101,7 +102,7 @@ export default function SellerOrdersClient() {
       const fromIso = getFromDate(tab);
       const { data, error: e } = await supabase
         .from('orders')
-        .select('id, created_at, payment_type, total_sum, status, is_preorder, is_debt, debt_status, debt_payment_method')
+        .select('id, order_number, created_at, payment_type, total_sum, status, is_preorder, is_debt, debt_status, debt_payment_method')
         .eq('seller_id', profile.id)
         .gte('created_at', fromIso)
         .order('created_at', { ascending: false });
@@ -147,7 +148,7 @@ export default function SellerOrdersClient() {
         .from('orders')
         .select(
           `
-          id, created_at, payment_type, total_sum, status, is_preorder, preorder_status, is_debt, debt_status, debt_payment_method,
+          id, order_number, created_at, payment_type, total_sum, status, is_preorder, preorder_status, is_debt, debt_status, debt_payment_method,
           order_items:order_items ( qty, price, line_sum, is_gift, product_name_snapshot, product:products ( name ) )
         `
         )
@@ -233,14 +234,6 @@ export default function SellerOrdersClient() {
         setError(e.message);
         return;
       }
-      void logAction(supabase, {
-        user_id: profile?.id ?? null,
-        user_name: profile?.display_name ?? null,
-        user_role: profile?.role ?? 'seller',
-        action: 'order_cancel',
-        entity_type: 'order',
-        entity_id: orderId,
-      });
       await loadOrders();
       await loadOrderDetail(orderId);
     } finally {
@@ -304,6 +297,7 @@ export default function SellerOrdersClient() {
                 >
                   <div className="flex items-start justify-between gap-2 min-w-0">
                     <div className="min-w-0 flex-1">
+                      <div className="text-xs sm:text-sm font-medium text-gray-900">{displayOrderNumber(o)}</div>
                       <div className="text-xs sm:text-sm text-gray-600">{formatDate(o.created_at)}</div>
                       <div className="text-xs sm:text-sm text-gray-600">
                         {o.debt_status === 'paid' && (o.payment_type === 'debt' || !o.payment_type) ? o.debt_payment_method ?? '—' : o.payment_type ?? '—'}
@@ -339,7 +333,7 @@ export default function SellerOrdersClient() {
                   <div className="text-red-600 text-sm">{t('orders.loadFailed')}</div>
                 ) : (
                   <>
-                    <div className="text-base sm:text-xl font-bold mb-3 sm:mb-4 text-gray-900">{t('common.order')} {formatDate(orderDetail.created_at)}</div>
+                    <div className="text-base sm:text-xl font-bold mb-3 sm:mb-4 text-gray-900">{t('common.order')} {displayOrderNumber(orderDetail)}</div>
                     {orderDetail.status === 'canceled' && (
                       <div className="mb-2">
                         <span className="inline-block px-2 py-1 text-xs sm:text-sm font-medium bg-red-100 text-red-700 rounded">

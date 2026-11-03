@@ -3,9 +3,7 @@
 import { useEffect, useState } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
-import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabaseClient';
-import { fulfillPreorder } from '@/lib/fulfillPreorder';
 import {
   getAccountingDate,
   getRecognizedAt,
@@ -18,9 +16,9 @@ import { getTodayLocalISO } from '@/lib/datetime';
 import type { Order, PreorderStatus } from '@/lib/types';
 import type { City } from '@/lib/types';
 import type { Profile } from '@/lib/types';
-import { logAction } from '@/lib/actionLog';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
+import { displayOrderNumber, parseOrderNumberQuery } from '@/lib/orderNumber';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -56,7 +54,6 @@ function firstDayOfMonthISO() {
 }
 
 export default function AdminOrdersPage() {
-  const { profile } = useAuth();
   const { t } = useTranslation();
   const ensureActive = useEnsureActiveDevice();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -77,6 +74,15 @@ export default function AdminOrdersPage() {
   const [fulfillingId, setFulfillingId] = useState<string | null>(null);
   const [payingDebtId, setPayingDebtId] = useState<string | null>(null);
   const [debtPaymentMethod, setDebtPaymentMethod] = useState<string>('');
+  const [numberSearch, setNumberSearch] = useState('');
+  const [orderHistory, setOrderHistory] = useState<Array<{
+    id: string;
+    created_at: string;
+    action: string;
+    user_name: string | null;
+    user_role: string | null;
+    details: Record<string, unknown> | null;
+  }>>([]);
   const [preorderColumnsMissing, setPreorderColumnsMissing] = useState(false);
   const [periodRevenue, setPeriodRevenue] = useState<number>(0);
 
@@ -160,7 +166,7 @@ export default function AdminOrdersPage() {
   }, [startDate, endDate, dateRangeInvalid, filterCity, filterSeller, refreshKey]);
 
   useEffect(() => {
-    if (dateRangeInvalid || !fromParts || !toParts) {
+    if (!parseOrderNumberQuery(numberSearch) && (dateRangeInvalid || !fromParts || !toParts)) {
       setOrders([]);
       setLoading(false);
       return;
@@ -168,6 +174,28 @@ export default function AdminOrdersPage() {
 
     async function load() {
       setLoading(true);
+      const applyFilters = (q: any) => {
+        if (filterCity?.trim()) q = q.eq('city_id', filterCity);
+        if (filterSeller?.trim()) q = q.eq('seller_id', filterSeller);
+        if (filterStatus?.trim()) q = q.eq('status', filterStatus);
+        return q;
+      };
+
+      const numberQ = parseOrderNumberQuery(numberSearch);
+      if (numberQ) {
+        let q = applyFilters(supabase.from('orders').select('*')).eq('order_number', numberQ);
+        if (viewMode === 'preorders') {
+          q = q.eq('is_preorder', true);
+          if (filterPreorderStatus?.trim()) q = q.eq('preorder_status', filterPreorderStatus);
+        } else if (viewMode === 'debts') {
+          q = q.or('is_debt.eq.true,payment_type.eq.debt');
+        }
+        const { data } = await q;
+        setOrders(((data || []) as Order[]));
+        setLoading(false);
+        return;
+      }
+
       const fp = fromParts!;
       const tp = toParts!;
       const from = new Date(fp.y, fp.m - 1, fp.d, 0, 0, 0, 0);
@@ -175,13 +203,6 @@ export default function AdminOrdersPage() {
       toNext.setDate(toNext.getDate() + 1);
       const fromISO = from.toISOString();
       const toNextISO = toNext.toISOString();
-
-      const applyFilters = (q: any) => {
-        if (filterCity?.trim()) q = q.eq('city_id', filterCity);
-        if (filterSeller?.trim()) q = q.eq('seller_id', filterSeller);
-        if (filterStatus?.trim()) q = q.eq('status', filterStatus);
-        return q;
-      };
 
       if (viewMode === 'all') {
         const q = applyFilters(supabase.from('orders').select('*'))
@@ -239,11 +260,12 @@ export default function AdminOrdersPage() {
     }
 
     load();
-  }, [startDate, endDate, dateRangeInvalid, filterCity, filterSeller, filterStatus, viewMode, filterPreorderStatus, filterDebtStatus, refreshKey]);
+  }, [startDate, endDate, dateRangeInvalid, filterCity, filterSeller, filterStatus, viewMode, filterPreorderStatus, filterDebtStatus, refreshKey, numberSearch]);
 
   useEffect(() => {
     if (!selectedId) {
       setOrderDetail(null);
+      setOrderHistory([]);
       return;
     }
     supabase
@@ -252,7 +274,14 @@ export default function AdminOrdersPage() {
       .eq('id', selectedId)
       .single()
       .then(({ data }) => setOrderDetail(data as Order | null));
-  }, [selectedId]);
+    supabase
+      .from('action_logs')
+      .select('id, created_at, action, user_name, user_role, details')
+      .eq('entity_type', 'order')
+      .eq('entity_id', selectedId)
+      .order('created_at', { ascending: true })
+      .then(({ data }) => setOrderHistory((data as typeof orderHistory) ?? []));
+  }, [selectedId, refreshKey]);
 
   async function handleCancel(orderId: string, reason?: string | null) {
     if (!(await ensureActive())) return;
@@ -264,15 +293,6 @@ export default function AdminOrdersPage() {
       alert(error.message);
       return;
     }
-    void logAction(supabase, {
-      user_id: profile?.id ?? null,
-      user_name: profile?.display_name ?? null,
-      user_role: profile?.role ?? 'admin',
-      action: 'order_cancel',
-      entity_type: 'order',
-      entity_id: orderId,
-      details: { admin: true },
-    });
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -314,15 +334,6 @@ export default function AdminOrdersPage() {
       alert(error.message);
       return;
     }
-    void logAction(supabase, {
-      user_id: profile?.id ?? null,
-      user_name: profile?.display_name ?? null,
-      user_role: profile?.role ?? 'admin',
-      action: 'debt_pay',
-      entity_type: 'order',
-      entity_id: orderId,
-      details: { admin: true, payment_method: method },
-    });
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -335,61 +346,25 @@ export default function AdminOrdersPage() {
         d ? { ...d, debt_status: 'paid', debt_paid_at: new Date().toISOString(), payment_type: method } : null
       );
     }
+    setRefreshKey((k) => k + 1);
   }
 
   async function handleFulfillPreorder(orderId: string) {
     if (!(await ensureActive())) return;
     setFulfillingId(orderId);
     const { error } = await supabase.rpc('fulfill_preorder', { p_order_id: orderId });
+    setFulfillingId(null);
     if (error) {
-      if (error.message?.includes('Could not find the function') || error.message?.includes('not find')) {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user?.id) {
-          const result = await fulfillPreorder(supabase, orderId, user.id);
-          setFulfillingId(null);
-          if (result.success) {
-            void logAction(supabase, {
-              user_id: user?.id ?? null,
-              user_name: profile?.display_name ?? null,
-              user_role: profile?.role ?? 'admin',
-              action: 'preorder_fulfill',
-              entity_type: 'order',
-              entity_id: orderId,
-              details: { admin: true },
-            });
-            const now = new Date().toISOString();
-            setOrders((prev) =>
-              prev.map((o) => (o.id === orderId ? { ...o, preorder_status: 'fulfilled' as const, fulfilled_at: now } : o))
-            );
-            if (orderDetail?.id === orderId)
-              setOrderDetail((d) => (d ? { ...d, preorder_status: 'fulfilled', fulfilled_at: now } : null));
-            alert('Выдано');
-            return;
-          }
-          alert(result.error ?? 'Недостаточно остатков на складе');
-          return;
-        }
-      }
-      setFulfillingId(null);
       alert(error.message?.includes('Insufficient') ? 'Недостаточно остатков на складе' : error.message);
       return;
     }
-    setFulfillingId(null);
-    void logAction(supabase, {
-      user_id: profile?.id ?? null,
-      user_name: profile?.display_name ?? null,
-      user_role: profile?.role ?? 'admin',
-      action: 'preorder_fulfill',
-      entity_type: 'order',
-      entity_id: orderId,
-      details: { admin: true },
-    });
     const now = new Date().toISOString();
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, preorder_status: 'fulfilled' as const, fulfilled_at: now } : o))
     );
     if (orderDetail?.id === orderId)
       setOrderDetail((d) => (d ? { ...d, preorder_status: 'fulfilled', fulfilled_at: now } : null));
+    setRefreshKey((k) => k + 1);
     alert('Выдано');
   }
 
@@ -479,6 +454,13 @@ export default function AdminOrdersPage() {
                 </option>
               ))}
             </select>
+            <input
+              type="search"
+              value={numberSearch}
+              onChange={(e) => setNumberSearch(e.target.value)}
+              placeholder={t('admin.searchNumber')}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white min-w-[10rem]"
+            />
             {viewMode === 'all' && (
               <select
                 value={filterStatus}
@@ -577,6 +559,7 @@ export default function AdminOrdersPage() {
               <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-gray-100 text-gray-900">
                   <tr>
+                    <th className="p-2 text-left whitespace-nowrap">{t('admin.orderNumber')}</th>
                     <th className="p-2 text-left whitespace-nowrap">{t('admin.date')}</th>
                     <th className="p-2 text-left whitespace-nowrap">{t('admin.city')}</th>
                     <th className="p-2 text-left whitespace-nowrap">{t('admin.seller')}</th>
@@ -602,6 +585,7 @@ export default function AdminOrdersPage() {
                 <tbody>
                   {orders.map((o) => (
                     <tr key={o.id} className="border-t border-gray-200">
+                      <td className="p-2 whitespace-nowrap font-medium text-gray-900">{displayOrderNumber(o)}</td>
                       <td className="p-2 whitespace-nowrap text-gray-900">{formatDate(String(getAccountingDate(o) ?? o.created_at))}</td>
                       <td className="p-2 whitespace-nowrap text-gray-900">{cityMap.get(o.city_id) || o.city_id}</td>
                       <td className="p-2 whitespace-nowrap text-gray-900">{sellerMap.get(o.seller_id) || o.seller_id}</td>
@@ -681,7 +665,7 @@ export default function AdminOrdersPage() {
                 className="bg-white rounded-xl p-6 max-w-md w-full max-h-[80vh] overflow-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <h2 className="font-bold mb-2 text-gray-900">{t('admin.orderId')} {orderDetail.id.slice(0, 8)}</h2>
+                <h2 className="font-bold mb-2 text-gray-900">{t('admin.orderId')} {displayOrderNumber(orderDetail)}</h2>
                 {orderDetail && orderStatusCanceled(orderDetail) && (
                   <span className="inline-block mb-2 px-2 py-1 text-sm font-medium bg-red-100 text-red-700 rounded">
                     {t('admin.cancelledShort')}
@@ -724,6 +708,21 @@ export default function AdminOrdersPage() {
                   </>
                 )}
                 {orderDetail.comment && <p className="text-gray-900">{t('admin.comment')}: {orderDetail.comment}</p>}
+                <div className="mt-3 pt-3 border-t border-gray-200">
+                  <p className="text-sm font-semibold text-gray-900 mb-1">{t('admin.history')}</p>
+                  {orderHistory.length === 0 ? (
+                    <p className="text-xs text-gray-600">{t('admin.historyEmpty')}</p>
+                  ) : (
+                    <ul className="space-y-1 text-xs text-gray-800">
+                      {orderHistory.map((h) => (
+                        <li key={h.id}>
+                          {formatDate(h.created_at)} · {h.action}
+                          {h.user_name ? ` · ${h.user_name}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <div className="mt-2 space-y-1 text-gray-900">
                   {orderDetail.order_items?.map((item) => (
                     <div key={item.id} className="text-sm">

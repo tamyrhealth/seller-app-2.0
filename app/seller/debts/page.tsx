@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth';
 import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
-import { logAction } from '@/lib/actionLog';
+import { displayOrderNumber } from '@/lib/orderNumber';
 import type { Order } from '@/lib/types';
 import type { City } from '@/lib/types';
 
@@ -247,15 +247,6 @@ export default function SellerDebtsPage() {
         .eq('id', orderId);
     }
 
-    void logAction(supabase, {
-      user_id: profile?.id ?? null,
-      user_name: profile?.display_name ?? null,
-      user_role: profile?.role ?? 'seller',
-      action: 'debt_pay',
-      entity_type: 'order',
-      entity_id: orderId,
-      details: { payment_method: normalizedMethod },
-    });
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -431,7 +422,7 @@ export default function SellerDebtsPage() {
                 className="bg-white rounded-xl p-4 sm:p-6 max-w-md w-full max-h-[85vh] overflow-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <h2 className="font-bold mb-2 text-sm sm:text-base">{t('debts.modalTitle')} {orderDetail.id.slice(0, 8)}</h2>
+                <h2 className="font-bold mb-2 text-sm sm:text-base">{t('debts.modalTitle')} {displayOrderNumber(orderDetail)}</h2>
                 <div className="mb-2">
                   {(orderDetail as Order & { status?: string }).status === 'canceled' ? (
                     <span className="inline-block px-2 py-1 text-xs sm:text-sm font-bold bg-red-100 text-red-800 rounded">

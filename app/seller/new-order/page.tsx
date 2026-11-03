@@ -10,7 +10,6 @@ import { useAuth } from '@/lib/auth';
 import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
-import { logAction } from '@/lib/actionLog';
 import {
   buildClientOrderFingerprint,
   getOrCreateOrderIdempotencyKey,
@@ -302,16 +301,6 @@ export default function NewOrderPage() {
       setDebtCustomerName('');
       setDebtDueAt('');
       setDebtNote('');
-      const action = isDebtToggle ? 'debt_create' : isPreorderToggle ? 'preorder_create' : 'order_create';
-      void logAction(supabase, {
-        user_id: profile.id,
-        user_name: profile.display_name ?? null,
-        user_role: profile.role ?? 'seller',
-        action,
-        entity_type: 'order',
-        entity_id: orderId,
-        details: { total: totalSum, items_count: cart.length },
-      });
       router.refresh();
       router.push(isDebtToggle ? `/seller/debts` : `/seller/orders?id=${orderId}`);
     } catch (err) {

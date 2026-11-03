@@ -43,6 +43,7 @@ export type OrderItem = {
 
 export type Order = {
   id: string;
+  order_number?: string | null;
   created_at: string;
   updated_at?: string;
   cancelled_at?: string | null;

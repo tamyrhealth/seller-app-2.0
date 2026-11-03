@@ -259,6 +259,10 @@ const ru: Dict = {
   'admin.paidShort': 'Погашен',
   'admin.writtenOffShort': 'Списан',
   'admin.orderId': 'Заказ',
+  'admin.orderNumber': 'Номер',
+  'admin.searchNumber': 'Поиск по номеру',
+  'admin.history': 'История',
+  'admin.historyEmpty': 'Записей нет',
 };
 
 const kz: Dict = {
@@ -514,6 +518,10 @@ const kz: Dict = {
   'admin.paidShort': 'Төленген',
   'admin.writtenOffShort': 'Жазылған',
   'admin.orderId': 'Тапсырыс',
+  'admin.orderNumber': 'Нөмір',
+  'admin.searchNumber': 'Нөмір бойынша іздеу',
+  'admin.history': 'Тарих',
+  'admin.historyEmpty': 'Жазба жоқ',
 };
 
 const dictionaries: Record<Lang, Dict> = { ru, kz };
