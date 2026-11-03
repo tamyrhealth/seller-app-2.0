@@ -5,10 +5,23 @@ import { runExclusive } from '@/lib/exclusiveAsync';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import { supabase } from '@/lib/supabaseClient';
-import type { Product } from '@/lib/types';
+import {
+  isMissingCostBackend,
+  mergeProductCosts,
+  productCatalogPayload,
+  type ProductCostRow,
+} from '@/lib/productCost';
+import { PRODUCT_CATALOG_SELECT, type Product } from '@/lib/types';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
+}
+
+function mapProductSaveError(message: string): string {
+  if (message.includes('cost_price')) {
+    return 'Сначала примените SQL-миграцию себестоимости (products.cost_price), затем сохраните снова.';
+  }
+  return message;
 }
 
 const UNIT_LABELS: Record<string, string> = {
@@ -35,9 +48,11 @@ export default function AdminProductsPage() {
     category: '',
     unit: 'pcs',
     price_retail: '',
+    cost_price: '',
     is_active: true,
   });
   const [showArchived, setShowArchived] = useState(false);
+  const [costBackendReady, setCostBackendReady] = useState(false);
 
   const filtered = products.filter(
     (p) =>
@@ -50,8 +65,15 @@ export default function AdminProductsPage() {
   }, []);
 
   async function load() {
-    const { data } = await supabase.from('products').select('*').order('name');
-    setProducts(data || []);
+    const { data } = await supabase.from('products').select(PRODUCT_CATALOG_SELECT).order('name');
+    const { data: costs, error: costError } = await supabase.rpc('admin_product_costs');
+    if (costError) {
+      setCostBackendReady(false);
+      setProducts(mergeProductCosts((data || []) as Product[], []));
+    } else {
+      setCostBackendReady(true);
+      setProducts(mergeProductCosts((data || []) as Product[], (costs || []) as ProductCostRow[]));
+    }
     setLoading(false);
   }
 
@@ -61,6 +83,7 @@ export default function AdminProductsPage() {
       category: '',
       unit: 'pcs',
       price_retail: '',
+      cost_price: '',
       is_active: true,
     });
     setShowForm(false);
@@ -68,35 +91,43 @@ export default function AdminProductsPage() {
   }
 
   async function handleSave() {
-    await runExclusive(`product-save:${editingId ?? 'new'}:${form.name}:${form.price_retail}`, async () => {
+    await runExclusive(`product-save:${editingId ?? 'new'}:${form.name}:${form.price_retail}:${form.cost_price}`, async () => {
     const price = parseFloat(form.price_retail);
+    const costRaw = form.cost_price.trim();
+    const cost = costRaw === '' ? null : parseFloat(costRaw);
     if (!form.name || isNaN(price) || price < 0) {
-      alert('Заполните название и цену');
+      alert('Заполните название и розничную цену');
+      return;
+    }
+    if (cost != null && (isNaN(cost) || cost < 0)) {
+      alert('Себестоимость не может быть отрицательной. Оставьте поле пустым, если неизвестна.');
       return;
     }
 
+    const catalog = productCatalogPayload({
+      name: form.name,
+      category: form.category || null,
+      unit: form.unit,
+      price_retail: price,
+      is_active: form.is_active,
+    });
+    const payload = costBackendReady ? { ...catalog, cost_price: cost } : catalog;
+
     if (editingId) {
-      const { error } = await supabase
-        .from('products')
-        .update({
-          name: form.name,
-          category: form.category || null,
-          unit: form.unit,
-          price_retail: price,
-          is_active: form.is_active,
-        })
-        .eq('id', editingId);
-      if (error) alert(error.message);
+      let { error } = await supabase.from('products').update(payload).eq('id', editingId);
+      if (error && isMissingCostBackend(error.message)) {
+        ({ error } = await supabase.from('products').update(catalog).eq('id', editingId));
+        if (!error) alert(mapProductSaveError('cost_price'));
+      }
+      if (error) alert(mapProductSaveError(error.message));
       else resetForm();
     } else {
-      const { error } = await supabase.from('products').insert({
-        name: form.name,
-        category: form.category || null,
-        unit: form.unit,
-        price_retail: price,
-        is_active: form.is_active,
-      });
-      if (error) alert(error.message);
+      let { error } = await supabase.from('products').insert(payload);
+      if (error && isMissingCostBackend(error.message)) {
+        ({ error } = await supabase.from('products').insert(catalog));
+        if (!error) alert(mapProductSaveError('cost_price'));
+      }
+      if (error) alert(mapProductSaveError(error.message));
       else resetForm();
     }
     load();
@@ -153,6 +184,7 @@ export default function AdminProductsPage() {
       category: p.category || '',
       unit: p.unit,
       price_retail: String(p.price_retail),
+      cost_price: p.cost_price == null ? '' : String(p.cost_price),
       is_active: p.is_active,
     });
     setShowForm(true);
@@ -226,6 +258,18 @@ export default function AdminProductsPage() {
                   onChange={(e) => setForm({ ...form, price_retail: e.target.value })}
                   className="px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
                 />
+                <input
+                  type="number"
+                  placeholder={
+                    costBackendReady
+                      ? 'Себестоимость (не розница). Пусто = не указана'
+                      : 'Себестоимость будет доступна после SQL-миграции'
+                  }
+                  value={form.cost_price}
+                  onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+                  disabled={!costBackendReady}
+                  className="px-3 py-2 border border-gray-300 rounded bg-white text-gray-900 disabled:bg-gray-100"
+                />
                 <label className="flex items-center gap-2 text-gray-900">
                   <input
                     type="checkbox"
@@ -269,7 +313,10 @@ export default function AdminProductsPage() {
                       )}
                     </p>
                     <p className="text-sm text-gray-600">
-                      {p.category || '-'} · {formatMoney(p.price_retail)} ₸ / {unitLabel(p.unit)}
+                      {p.category || '-'} · розница {formatMoney(p.price_retail)} ₸ / {unitLabel(p.unit)}
+                      {' · '}
+                      себестоимость{' '}
+                      {p.cost_price == null ? 'не указана' : `${formatMoney(p.cost_price)} ₸`}
                     </p>
                   </div>
                   <div className="flex gap-2">

@@ -10,9 +10,11 @@ import {
 } from '@/lib/inventoryOperation';
 import {
   mapTransferRpcError,
-  transferOpenLabel,
+  transferDisplayStatus,
+  transferLineQtys,
   transferRemaining,
   transferStatusLabel,
+  transferTotals,
 } from '@/lib/stockTransfer';
 import { supabase } from '@/lib/supabaseClient';
 import type { City, Product } from '@/lib/types';
@@ -191,8 +193,13 @@ export default function TransfersPanel({
         (sum, item) => sum + transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned),
         0
       );
+      const lost = (t.stock_transfer_items || []).reduce((sum, item) => sum + Number(item.qty_lost || 0), 0);
       if (statusFilter === 'in_transit') {
         if (t.status === 'cancelled' || remain <= 0) return false;
+      } else if (statusFilter === 'closed_with_shortage') {
+        if (remain > 0 || lost <= 0) return false;
+      } else if (statusFilter === 'received') {
+        if (t.status === 'cancelled' || remain > 0 || lost > 0) return false;
       } else if (statusFilter && t.status !== statusFilter) {
         return false;
       }
@@ -204,14 +211,8 @@ export default function TransfersPanel({
   }, [transfers, q, statusFilter, cityFilter, dateFrom, dateTo]);
 
   const openRow = transfers.find((t) => t.id === openId) || null;
-  const openRemaining = (openRow?.stock_transfer_items || []).reduce(
-    (sum, item) => sum + transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned),
-    0
-  );
-  const openReceived = (openRow?.stock_transfer_items || []).reduce(
-    (sum, item) => sum + Number(item.qty_received || 0),
-    0
-  );
+  const openTotals = transferTotals(openRow?.stock_transfer_items || []);
+  const openRemaining = openTotals.remaining;
   const isOpen = !!openRow && openRow.status !== 'cancelled' && openRemaining > 0;
 
   async function handleCreate() {
@@ -505,7 +506,7 @@ export default function TransfersPanel({
           <option value="">Все статусы</option>
           <option value="in_transit">В пути</option>
           <option value="received">Получено</option>
-          <option value="received_with_variance">Получено с расхождением</option>
+          <option value="closed_with_shortage">Закрыто с недостачей</option>
           <option value="cancelled">Отменено</option>
         </select>
         <select
@@ -550,15 +551,10 @@ export default function TransfersPanel({
               <div className="flex justify-between gap-2 flex-wrap">
                 <span className="font-medium text-gray-900">{t.transfer_number}</span>
                 <span className="text-sm text-gray-700">
-                  {transferOpenLabel(
-                    t.status,
-                    (t.stock_transfer_items || []).reduce(
-                      (sum, item) =>
-                        sum + transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned),
-                      0
-                    ),
-                    (t.stock_transfer_items || []).reduce((sum, item) => sum + Number(item.qty_received || 0), 0)
-                  )}
+                  {transferDisplayStatus({
+                    status: t.status,
+                    ...transferTotals(t.stock_transfer_items || []),
+                  })}
                 </span>
               </div>
               <p className="text-sm text-gray-600">
@@ -577,7 +573,13 @@ export default function TransfersPanel({
             {cityName(openRow.from_city_id)} → {cityName(openRow.to_city_id)}
           </p>
           <p className="text-sm text-gray-700 mb-1">
-            Статус: {transferOpenLabel(openRow.status, openRemaining, openReceived)}
+            Статус:{' '}
+            {transferDisplayStatus({
+              status: openRow.status,
+              remaining: openTotals.remaining,
+              received: openTotals.received,
+              lost: openTotals.lost,
+            })}
           </p>
           <p className="text-sm text-gray-700 mb-1">
             Отправка: {new Date(openRow.created_at).toLocaleString('ru-KZ')} · {who(openRow.created_by)}
@@ -596,23 +598,19 @@ export default function TransfersPanel({
           )}
           <ul className="mb-3 space-y-2">
             {(openRow.stock_transfer_items || []).map((item) => {
-              const remain = transferRemaining(
-                item.qty_sent,
-                item.qty_received,
-                item.qty_lost,
-                item.qty_returned
-              );
+              const q = transferLineQtys(item);
+              const remain = q.remaining;
               return (
                 <li key={item.id} className="text-sm text-gray-800">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="flex-1">{productName(item, products)}</span>
-                    <span>отправлено {item.qty_sent}</span>
-                    <span>получено {item.qty_received ?? 0}</span>
-                    <span>в пути {remain}</span>
-                    {Number(item.qty_lost || 0) > 0 && (
-                      <span className="text-amber-800">недостача {item.qty_lost}</span>
-                    )}
-                    {Number(item.qty_returned || 0) > 0 && <span>возвращено {item.qty_returned}</span>}
+                    <span>отправлено {q.sent}</span>
+                    <span>получено {q.received}</span>
+                    <span>в пути {q.remaining}</span>
+                    <span>возвращено отправителю {q.returned}</span>
+                    <span className={q.lost > 0 ? 'text-amber-800 font-medium' : ''}>
+                      списано в недостачу {q.lost}
+                    </span>
                   </div>
                   {isOpen && remain > 0 && (
                     <div className="mt-1 flex flex-wrap gap-2">

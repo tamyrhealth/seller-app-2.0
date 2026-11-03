@@ -17,12 +17,16 @@ export type Profile = {
 
 export type PaymentType = 'cash' | 'kaspi' | 'card' | 'transfer' | 'debt';
 
+export const PRODUCT_CATALOG_SELECT =
+  'id, name, category, unit, price_retail, is_active, created_at, sort_order';
+
 export type Product = {
   id: string;
   name: string;
   category?: string | null;
   unit: string;
   price_retail: number;
+  cost_price?: number | null;
   is_active: boolean;
   created_at?: string | null;
   sort_order?: number | null;

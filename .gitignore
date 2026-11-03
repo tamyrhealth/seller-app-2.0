@@ -16,6 +16,9 @@
 # next.js
 /.next/
 /.next-check/
+/.next-block2-check/
+/.next-block42/
+/.next-block42-check/
 /out/
 
 # production

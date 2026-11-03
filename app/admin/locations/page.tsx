@@ -10,8 +10,7 @@ import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import TransfersPanel from '@/components/TransfersPanel';
 import { supabase } from '@/lib/supabaseClient';
-import type { City } from '@/lib/types';
-import type { Product } from '@/lib/types';
+import { PRODUCT_CATALOG_SELECT, type City, type Product } from '@/lib/types';
 
 interface InventoryRow {
   id: string;
@@ -95,7 +94,11 @@ export default function AdminLocationsPage() {
 
   useEffect(() => {
     loadCities();
-    supabase.from('products').select('*').eq('is_active', true).then(({ data }) => setProducts(data || []));
+    supabase
+      .from('products')
+      .select(PRODUCT_CATALOG_SELECT)
+      .eq('is_active', true)
+      .then(({ data }) => setProducts(data || []));
     supabase
       .from('profiles')
       .select('id, display_name')

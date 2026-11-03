@@ -9,7 +9,12 @@ import {
   transferReceiveFingerprint,
   transferWriteOffFingerprint,
 } from '../lib/inventoryOperation';
-import { mapTransferRpcError, transferRemaining, transferStatusLabel } from '../lib/stockTransfer';
+import {
+  mapTransferRpcError,
+  transferDisplayStatus,
+  transferRemaining,
+  transferStatusLabel,
+} from '../lib/stockTransfer';
 
 function fail(msg: string): never {
   console.error('FAIL', msg);
@@ -105,7 +110,13 @@ if (/DELETE\s+FROM\s+public\.(cities|inventory|orders|products)/i.test(sql)) {
 }
 
 if (transferStatusLabel('in_transit') !== 'В пути') fail('in_transit label');
-if (transferStatusLabel('received_with_variance') !== 'Получено с расхождением') fail('variance label');
+if (transferStatusLabel('received_with_variance') !== 'Закрыто с недостачей') fail('variance label');
+if (
+  transferDisplayStatus({ status: 'received_with_variance', remaining: 50, received: 25, lost: 0 }) !==
+  'В пути (частично получено)'
+) {
+  fail('display status must prefer in-transit over stale received_with_variance');
+}
 if (!mapTransferRpcError('Insufficient stock').includes('Недостаточно')) fail('shortage mapping');
 
 const items = [

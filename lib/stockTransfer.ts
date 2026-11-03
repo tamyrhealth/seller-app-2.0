@@ -12,7 +12,7 @@ export function transferRemaining(
 export function transferStatusLabel(status: string): string {
   if (status === 'in_transit') return 'В пути';
   if (status === 'received') return 'Получено';
-  if (status === 'received_with_variance') return 'Получено с расхождением';
+  if (status === 'received_with_variance') return 'Закрыто с недостачей';
   if (status === 'cancelled') return 'Отменено';
   if (status === 'created') return 'Отправка';
   if (status === 'received_partial') return 'Получение';
@@ -20,10 +20,59 @@ export function transferStatusLabel(status: string): string {
   return status;
 }
 
-export function transferOpenLabel(status: string, remaining: number, received: number): string {
-  if (remaining > 0 && received > 0) return 'В пути (частично получено)';
-  if (remaining > 0) return 'В пути';
-  return transferStatusLabel(status);
+export function transferLineQtys(item: {
+  qty_sent: number;
+  qty_received?: number | null;
+  qty_lost?: number | null;
+  qty_returned?: number | null;
+}): { sent: number; received: number; remaining: number; returned: number; lost: number } {
+  const sent = Number(item.qty_sent || 0);
+  const received = Number(item.qty_received || 0);
+  const returned = Number(item.qty_returned || 0);
+  const lost = Number(item.qty_lost || 0);
+  return {
+    sent,
+    received,
+    remaining: transferRemaining(sent, received, lost, returned),
+    returned,
+    lost,
+  };
+}
+
+export function transferTotals(
+  items: Array<{
+    qty_sent: number;
+    qty_received?: number | null;
+    qty_lost?: number | null;
+    qty_returned?: number | null;
+  }>
+) {
+  return items.reduce(
+    (acc, item) => {
+      const q = transferLineQtys(item);
+      acc.sent += q.sent;
+      acc.received += q.received;
+      acc.remaining += q.remaining;
+      acc.returned += q.returned;
+      acc.lost += q.lost;
+      return acc;
+    },
+    { sent: 0, received: 0, remaining: 0, returned: 0, lost: 0 }
+  );
+}
+
+export function transferDisplayStatus(opts: {
+  status: string;
+  remaining: number;
+  received: number;
+  lost: number;
+}): string {
+  if (opts.remaining > 0) {
+    return opts.received > 0 ? 'В пути (частично получено)' : 'В пути';
+  }
+  if (opts.lost > 0) return 'Закрыто с недостачей';
+  if (opts.status === 'received_with_variance') return 'Получено';
+  return transferStatusLabel(opts.status);
 }
 
 export function mapTransferRpcError(message: string): string {
