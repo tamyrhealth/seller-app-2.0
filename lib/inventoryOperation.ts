@@ -6,7 +6,8 @@ export type InventoryOpKind =
   | 'adjust'
   | 'transfer_create'
   | 'transfer_receive'
-  | 'transfer_cancel';
+  | 'transfer_cancel'
+  | 'transfer_writeoff';
 
 type Kind = InventoryOpKind;
 
@@ -115,6 +116,22 @@ export function transferReceiveFingerprint(
 
 export function transferCancelFingerprint(transferId: string, reason: string): string {
   return JSON.stringify({ kind: 'transfer_cancel', transferId, reason: reason.trim() });
+}
+
+export function transferWriteOffFingerprint(
+  transferId: string,
+  items: Array<{ product_id: string; qty: number }>,
+  reason: string
+): string {
+  const normalized = [...items]
+    .map((i) => ({ product_id: i.product_id, qty: roundQty(i.qty) }))
+    .sort((a, b) => a.product_id.localeCompare(b.product_id));
+  return JSON.stringify({
+    kind: 'transfer_writeoff',
+    transferId,
+    items: normalized,
+    reason: reason.trim(),
+  });
 }
 
 export function getOrCreateInventoryOperationId(kind: Kind, fingerprint: string): string {

@@ -7,8 +7,9 @@ import {
   transferCancelFingerprint,
   transferCreateFingerprint,
   transferReceiveFingerprint,
+  transferWriteOffFingerprint,
 } from '../lib/inventoryOperation';
-import { mapTransferRpcError, transferStatusLabel } from '../lib/stockTransfer';
+import { mapTransferRpcError, transferRemaining, transferStatusLabel } from '../lib/stockTransfer';
 
 function fail(msg: string): never {
   console.error('FAIL', msg);
@@ -78,6 +79,26 @@ if (!/^BEGIN;/m.test(sql) || !/^COMMIT;/m.test(sql)) fail('migration must be one
   }
   if (!verify.includes('policyname')) fail('verify must use pg_policies.policyname');
 }
+const sqlPartial = readFileSync(
+  join(process.cwd(), 'supabase', 'run_stock_transfer_partial_receive.sql'),
+  'utf8'
+);
+for (const needle of [
+  'write_off_stock_transfer_shortage',
+  'qty_lost',
+  'qty_returned',
+  'stock_transfer_remaining',
+  'Received qty exceeds remaining in transit',
+  'Shortage reason is required',
+  'v_inc',
+]) {
+  if (!sqlPartial.includes(needle)) fail(`partial SQL must contain ${needle}`);
+}
+if (/WHERE\s+transfer_number\s+IN\s*\(\s*'T000001'/i.test(sqlPartial)) {
+  fail('partial SQL must not rewrite T000001 rows');
+}
+if (transferRemaining(50, 0, 0, 0) !== 50) fail('remaining of unreceived must stay in transit');
+if (transferRemaining(50, 0, 0, 0) === 0) fail('unreceived must not be treated as lost');
 if (/UPDATE\s+public\.cities\s+SET\s+is_active/i.test(sql)) fail('must not change cities.is_active');
 if (/DELETE\s+FROM\s+public\.(cities|inventory|orders|products)/i.test(sql)) {
   fail('must not delete existing business rows');
@@ -121,11 +142,25 @@ type Transfer = {
   status: 'in_transit' | 'received' | 'received_with_variance' | 'cancelled';
   from: string;
   to: string;
-  items: Array<{ product: string; sent: number; received: number | null }>;
+  items: Array<{ product: string; sent: number; received: number; lost: number; returned: number }>;
   cancelCount: number;
   receiveCount: number;
   ops: Map<string, { kind: string; payload: string; result: string }>;
 };
+
+function remainOf(item: Transfer['items'][number]) {
+  return transferRemaining(item.sent, item.received, item.lost, item.returned);
+}
+
+function closeStatus(tr: Transfer) {
+  const remain = tr.items.reduce((s, i) => s + remainOf(i), 0);
+  const lost = tr.items.reduce((s, i) => s + i.lost, 0);
+  const received = tr.items.reduce((s, i) => s + i.received, 0);
+  if (remain > 0) return 'in_transit' as const;
+  if (received === 0 && lost === 0) return 'cancelled' as const;
+  if (lost > 0) return 'received_with_variance' as const;
+  return 'received' as const;
+}
 
 const stock = new Map<StockKey, number>([
   [key('A', 'powder'), 100],
@@ -189,7 +224,7 @@ async function createTransfer(
     status: 'in_transit',
     from,
     to,
-    items: lines.map((l) => ({ product: l.product, sent: l.qty, received: null })),
+    items: lines.map((l) => ({ product: l.product, sent: l.qty, received: 0, lost: 0, returned: 0 })),
     cancelCount: 0,
     receiveCount: 0,
     ops: new Map(),
@@ -210,17 +245,22 @@ async function receiveTransfer(
   return withTransferLock(tr.id, () =>
     applyOp(tr, opId, 'receive', payload, () => {
       if (tr.status === 'cancelled') throw new Error('Transfer is cancelled');
-      if (tr.status === 'received' || tr.status === 'received_with_variance') return tr.status;
-      let variance = false;
+      const remainingTotal = tr.items.reduce((s, i) => s + remainOf(i), 0);
+      if (remainingTotal <= 0) return tr.status;
       for (const item of tr.items) {
         const qty = got.find((g) => g.product === item.product)?.qty ?? 0;
-        if (qty > item.sent) throw new Error('Received qty exceeds sent qty');
-        if (qty !== item.sent) variance = true;
-        item.received = qty;
-        if (qty > 0) add(tr.to, item.product, qty);
+        if (!qty) continue;
+        const remain = remainOf(item);
+        let inc = qty;
+        if (qty > remain) inc = Number((qty - item.received).toFixed(3));
+        if (inc < 0) throw new Error('Invalid qty');
+        if (inc > remain) throw new Error('Received qty exceeds remaining in transit');
+        if (!inc) continue;
+        item.received += inc;
+        add(tr.to, item.product, inc);
       }
       tr.receiveCount += 1;
-      tr.status = variance ? 'received_with_variance' : 'received';
+      tr.status = closeStatus(tr);
       return tr.status;
     })
   );
@@ -230,14 +270,18 @@ async function cancelTransfer(tr: Transfer, opId: string, reason: string): Promi
   const payload = reason;
   return withTransferLock(tr.id, () =>
     applyOp(tr, opId, 'cancel', payload, () => {
-      if (tr.status === 'received' || tr.status === 'received_with_variance') {
-        throw new Error('Received transfer cannot be cancelled');
-      }
+      const remainingTotal = tr.items.reduce((s, i) => s + remainOf(i), 0);
       if (tr.status === 'cancelled') return 'cancelled';
-      for (const item of tr.items) add(tr.from, item.product, item.sent);
+      if (remainingTotal <= 0) throw new Error('Received transfer cannot be cancelled');
+      for (const item of tr.items) {
+        const remain = remainOf(item);
+        if (remain <= 0) continue;
+        add(tr.from, item.product, remain);
+        item.returned += remain;
+      }
       tr.cancelCount += 1;
-      tr.status = 'cancelled';
-      return 'cancelled';
+      tr.status = closeStatus(tr);
+      return tr.status;
     })
   );
 }
@@ -328,23 +372,107 @@ void (async () => {
   }
 
   add('A', 'powder', 50);
+  add('A', 'tea', 25);
+  const destPowderBeforeLike = get('B', 'powder');
+  const likeT1 = await createTransfer(
+    'T-like-1',
+    'op-c-like',
+    'A',
+    'B',
+    [
+      { product: 'tea', qty: 25 },
+      { product: 'powder', qty: 50 },
+    ],
+    ''
+  );
+  const firstLeg = await receiveTransfer(likeT1, 'op-r-like-1', [{ product: 'tea', qty: 25 }]);
+  if (firstLeg !== 'in_transit') fail('partial receive must stay in transit');
+  if (get('B', 'tea') !== 25) fail('tea must arrive at destination');
+  if (get('B', 'powder') !== destPowderBeforeLike) fail('unreceived powder must not credit destination');
+  if (get('A', 'powder') !== 0) fail('unreceived powder must not return to origin');
+  if (remainOf(likeT1.items.find((i) => i.product === 'powder')!) !== 50) {
+    fail('unreceived powder must remain in transit');
+  }
+  const secondLeg = await receiveTransfer(likeT1, 'op-r-like-2', [
+    { product: 'tea', qty: 25 },
+    { product: 'powder', qty: 50 },
+  ]);
+  if (secondLeg !== 'received') fail('second receive must close as received');
+  if (get('B', 'tea') !== 25) fail('already received tea must not credit twice');
+  if (get('B', 'powder') !== destPowderBeforeLike + 50) fail('second receive must credit only new qty');
+
+  add('A', 'tea', 25);
+  add('A', 'powder', 50);
+  const originTea = get('A', 'tea');
+  const destTea = get('B', 'tea');
+  const destPowder = get('B', 'powder');
+  const cancelPartial = await createTransfer(
+    'T-cancel-partial',
+    'op-c-cp',
+    'A',
+    'B',
+    [
+      { product: 'tea', qty: 25 },
+      { product: 'powder', qty: 50 },
+    ],
+    ''
+  );
+  await receiveTransfer(cancelPartial, 'op-r-cp', [{ product: 'tea', qty: 25 }]);
+  const afterCancelPartial = await cancelTransfer(cancelPartial, 'op-x-cp', 'return rest');
+  if (afterCancelPartial !== 'received') fail('return remaining after partial must close as received');
+  if (get('B', 'tea') !== destTea + 25) fail('cancel remaining must keep dest tea');
+  if (get('A', 'tea') !== originTea - 25) fail('cancel remaining must not restore received tea');
+  if (get('A', 'powder') !== 50) fail('cancel remaining must restore only in-transit powder');
+  if (get('B', 'powder') !== destPowder) fail('cancel remaining must not credit dest powder');
+
+  add('A', 'powder', 50);
+  const destBeforePartial = get('B', 'powder');
+  const originBeforePartial = get('A', 'powder');
   const partialTr = await createTransfer('T2', 'op-c2', 'A', 'B', [{ product: 'powder', qty: 50 }], '');
   const partial = await receiveTransfer(partialTr, 'op-r2', [{ product: 'powder', qty: 48 }]);
-  if (partial !== 'received_with_variance') fail('partial receive status');
-  if (get('B', 'powder') !== 148) fail('partial receive credits only received qty');
-  if (get('A', 'powder') !== 0) fail('variance must not return to origin');
+  if (partial !== 'in_transit') fail('partial receive must not auto-close as lost');
+  if (get('B', 'powder') !== destBeforePartial + 48) fail('partial receive credits only received qty');
+  if (get('A', 'powder') !== originBeforePartial - 50) fail('partial remainder must not return to origin');
+  await receiveTransfer(partialTr, 'op-r2b', [{ product: 'powder', qty: 2 }]);
+  if (partialTr.status !== 'received') fail('remainder receive must fully close');
 
   add('A', 'powder', 20);
+  const destBeforeLoss = get('B', 'powder');
+  const originBeforeLoss = get('A', 'powder');
+  const lossTr = await createTransfer('T-loss', 'op-c-loss', 'A', 'B', [{ product: 'powder', qty: 20 }], '');
+  await receiveTransfer(lossTr, 'op-r-loss', [{ product: 'powder', qty: 18 }]);
+  const woFp = transferWriteOffFingerprint(
+    lossTr.id,
+    [{ product_id: 'powder', qty: 2 }],
+    'broken bag'
+  );
+  if (woFp === transferWriteOffFingerprint(lossTr.id, [{ product_id: 'powder', qty: 2 }], 'other')) {
+    fail('write-off reason must change fingerprint');
+  }
+  applyOp(lossTr, 'op-wo', 'shortage', '2:broken bag', () => {
+    const item = lossTr.items[0];
+    item.lost += 2;
+    lossTr.status = closeStatus(lossTr);
+    return lossTr.status;
+  });
+  if (lossTr.status !== 'received_with_variance') fail('explicit shortage must close with variance');
+  if (get('A', 'powder') !== originBeforeLoss - 20) fail('shortage must not restore origin');
+  if (get('B', 'powder') !== destBeforeLoss + 18) fail('shortage must not credit destination');
+
+  add('A', 'powder', 20);
+  const originBeforeCancel = get('A', 'powder');
   const cancelTr = await createTransfer('T3', 'op-c3', 'A', 'B', [{ product: 'powder', qty: 20 }], '');
   await cancelTransfer(cancelTr, 'op-x3', 'mistake');
-  if (get('A', 'powder') !== 20) fail('cancel must restore origin once');
+  if (get('A', 'powder') !== originBeforeCancel) fail('cancel must restore origin once');
   await cancelTransfer(cancelTr, 'op-x3', 'mistake');
   await cancelTransfer(cancelTr, 'op-x3b', 'other');
   if (cancelTr.cancelCount !== 1) fail('repeat cancel must not restore twice');
-  if (get('A', 'powder') !== 20) fail('repeat cancel stock');
+  if (get('A', 'powder') !== originBeforeCancel) fail('repeat cancel stock');
 
+  const destBeforeRace = get('B', 'powder');
+  const originBeforeRace = get('A', 'powder');
   const race = await createTransfer('T4', 'op-c4', 'A', 'B', [{ product: 'powder', qty: 10 }], '');
-  if (get('A', 'powder') !== 10) fail('race setup origin');
+  if (get('A', 'powder') !== originBeforeRace - 10) fail('race setup origin');
   const raceRecv = receiveTransfer(race, 'op-r4', [{ product: 'powder', qty: 10 }]);
   const raceCancel = cancelTransfer(race, 'op-x4', 'race');
   const settled = await Promise.allSettled([raceRecv, raceCancel]);
@@ -354,14 +482,22 @@ void (async () => {
     fail('local lock: exactly one of concurrent receive/cancel should succeed');
   }
   if (race.status === 'received') {
-    if (get('B', 'powder') !== 158) fail('race receive destination');
-    if (get('A', 'powder') !== 10) fail('race receive must not restore origin');
+    if (get('B', 'powder') !== destBeforeRace + 10) fail('race receive destination');
+    if (get('A', 'powder') !== originBeforeRace - 10) fail('race receive must not restore origin');
   } else if (race.status === 'cancelled') {
-    if (get('A', 'powder') !== 20) fail('race cancel restore');
-    if (get('B', 'powder') !== 148) fail('race cancel must not credit dest');
+    if (get('A', 'powder') !== originBeforeRace) fail('race cancel restore');
+    if (get('B', 'powder') !== destBeforeRace) fail('race cancel must not credit dest');
   } else {
     fail(`unexpected race status ${race.status}`);
   }
+
+  const legacy = await createTransfer('T-legacy', 'op-c-leg', 'A', 'B', [{ product: 'powder', qty: 5 }], '');
+  await receiveTransfer(legacy, 'op-r-leg-a', [{ product: 'powder', qty: 0 }]);
+  legacy.status = 'received_with_variance';
+  legacy.items[0].received = 0;
+  if (remainOf(legacy.items[0]) !== 5) fail('legacy variance with qty_lost 0 still has remaining');
+  await receiveTransfer(legacy, 'op-r-leg-b', [{ product: 'powder', qty: 5 }]);
+  if (String(legacy.status) !== 'received') fail('legacy remaining must be receivable without auto restock');
 
   if (transferCancelFingerprint('t', 'a') === transferCancelFingerprint('t', 'b')) {
     fail('cancel reason must change fingerprint');

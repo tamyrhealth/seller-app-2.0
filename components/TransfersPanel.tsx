@@ -6,8 +6,14 @@ import {
   transferCancelFingerprint,
   transferCreateFingerprint,
   transferReceiveFingerprint,
+  transferWriteOffFingerprint,
 } from '@/lib/inventoryOperation';
-import { mapTransferRpcError, transferStatusLabel } from '@/lib/stockTransfer';
+import {
+  mapTransferRpcError,
+  transferOpenLabel,
+  transferRemaining,
+  transferStatusLabel,
+} from '@/lib/stockTransfer';
 import { supabase } from '@/lib/supabaseClient';
 import type { City, Product } from '@/lib/types';
 
@@ -16,6 +22,8 @@ type TransferItem = {
   product_id: string;
   qty_sent: number;
   qty_received: number | null;
+  qty_lost?: number | null;
+  qty_returned?: number | null;
   products?: { name?: string } | { name?: string }[] | null;
 };
 
@@ -99,7 +107,9 @@ export default function TransfersPanel({
   const [openId, setOpenId] = useState<string | null>(null);
   const [events, setEvents] = useState<TransferEvent[]>([]);
   const [recvQty, setRecvQty] = useState<Record<string, string>>({});
+  const [lostQty, setLostQty] = useState<Record<string, string>>({});
   const [cancelReason, setCancelReason] = useState('');
+  const [shortageReason, setShortageReason] = useState('');
 
   const cityName = useCallback(
     (id: string) => cities.find((c) => c.id === id)?.name || id.slice(0, 8),
@@ -114,17 +124,19 @@ export default function TransfersPanel({
   const load = useCallback(async () => {
     const base =
       'id, transfer_number, from_city_id, to_city_id, status, comment, created_by, created_at, received_by, received_at, cancelled_by, cancelled_at, cancelled_reason';
-    const withNames = `${base}, stock_transfer_items!stock_transfer_items_transfer_id_fkey(id, product_id, qty_sent, qty_received, products!stock_transfer_items_product_id_fkey(name))`;
-    const withoutNames = `${base}, stock_transfer_items!stock_transfer_items_transfer_id_fkey(id, product_id, qty_sent, qty_received)`;
+    const itemColsLost =
+      'stock_transfer_items!stock_transfer_items_transfer_id_fkey(id, product_id, qty_sent, qty_received, qty_lost, qty_returned, products!stock_transfer_items_product_id_fkey(name))';
+    const itemColsLegacy =
+      'stock_transfer_items!stock_transfer_items_transfer_id_fkey(id, product_id, qty_sent, qty_received, products!stock_transfer_items_product_id_fkey(name))';
     const first = await supabase
       .from('stock_transfers')
-      .select(withNames)
+      .select(`${base}, ${itemColsLost}`)
       .order('created_at', { ascending: false })
       .limit(300);
     const result = first.error
       ? await supabase
           .from('stock_transfers')
-          .select(withoutNames)
+          .select(`${base}, ${itemColsLegacy}`)
           .order('created_at', { ascending: false })
           .limit(300)
       : first;
@@ -159,12 +171,15 @@ export default function TransfersPanel({
       .order('created_at', { ascending: true })
       .then(({ data }) => setEvents((data || []) as TransferEvent[]));
     const row = transfers.find((t) => t.id === openId);
-    const next: Record<string, string> = {};
+    const nextRecv: Record<string, string> = {};
+    const nextLost: Record<string, string> = {};
     for (const item of row?.stock_transfer_items || []) {
-      next[item.product_id] =
-        item.qty_received != null ? String(item.qty_received) : String(item.qty_sent);
+      const remain = transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned);
+      nextRecv[item.product_id] = remain > 0 ? String(remain) : '0';
+      nextLost[item.product_id] = remain > 0 ? String(remain) : '0';
     }
-    setRecvQty(next);
+    setRecvQty(nextRecv);
+    setLostQty(nextLost);
     setCancelReason(row?.cancelled_reason || '');
   }, [openId, transfers]);
 
@@ -172,7 +187,15 @@ export default function TransfersPanel({
     const needle = q.trim().toLowerCase();
     return transfers.filter((t) => {
       if (needle && !t.transfer_number.toLowerCase().includes(needle)) return false;
-      if (statusFilter && t.status !== statusFilter) return false;
+      const remain = (t.stock_transfer_items || []).reduce(
+        (sum, item) => sum + transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned),
+        0
+      );
+      if (statusFilter === 'in_transit') {
+        if (t.status === 'cancelled' || remain <= 0) return false;
+      } else if (statusFilter && t.status !== statusFilter) {
+        return false;
+      }
       if (cityFilter && t.from_city_id !== cityFilter && t.to_city_id !== cityFilter) return false;
       if (dateFrom && t.created_at.slice(0, 10) < dateFrom) return false;
       if (dateTo && t.created_at.slice(0, 10) > dateTo) return false;
@@ -181,6 +204,15 @@ export default function TransfersPanel({
   }, [transfers, q, statusFilter, cityFilter, dateFrom, dateTo]);
 
   const openRow = transfers.find((t) => t.id === openId) || null;
+  const openRemaining = (openRow?.stock_transfer_items || []).reduce(
+    (sum, item) => sum + transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned),
+    0
+  );
+  const openReceived = (openRow?.stock_transfer_items || []).reduce(
+    (sum, item) => sum + Number(item.qty_received || 0),
+    0
+  );
+  const isOpen = !!openRow && openRow.status !== 'cancelled' && openRemaining > 0;
 
   async function handleCreate() {
     if (busy) return;
@@ -236,21 +268,27 @@ export default function TransfersPanel({
   }
 
   async function handleReceive() {
-    if (busy || !openRow || openRow.status !== 'in_transit') return;
+    if (busy || !openRow || !isOpen) return;
     const items: Array<{ product_id: string; qty_received: number }> = [];
     for (const line of openRow.stock_transfer_items || []) {
       const product = products.find((p) => p.id === line.product_id);
-      const qty = Number(recvQty[line.product_id]);
-      const err = qtyError(qty, product?.unit, { allowZero: true });
+      const qty = Number(recvQty[line.product_id] || 0);
+      const remain = transferRemaining(line.qty_sent, line.qty_received, line.qty_lost, line.qty_returned);
+      if (!qty) continue;
+      const err = qtyError(qty, product?.unit);
       if (err) {
         alert(err);
         return;
       }
-      if (qty > Number(line.qty_sent)) {
-        alert('Полученное количество не может быть больше отправленного');
+      if (qty > remain) {
+        alert('Количество больше остатка в пути');
         return;
       }
       items.push({ product_id: line.product_id, qty_received: qty });
+    }
+    if (items.length === 0) {
+      alert('Укажите количество к получению хотя бы по одному товару');
+      return;
     }
     const fingerprint = transferReceiveFingerprint(openRow.id, items);
     setBusy(true);
@@ -272,8 +310,57 @@ export default function TransfersPanel({
     }
   }
 
+  async function handleWriteOff() {
+    if (busy || !openRow || !isOpen) return;
+    if (!shortageReason.trim()) {
+      alert('Укажите причину недостачи');
+      return;
+    }
+    const items: Array<{ product_id: string; qty: number }> = [];
+    for (const line of openRow.stock_transfer_items || []) {
+      const product = products.find((p) => p.id === line.product_id);
+      const qty = Number(lostQty[line.product_id] || 0);
+      const remain = transferRemaining(line.qty_sent, line.qty_received, line.qty_lost, line.qty_returned);
+      if (!qty) continue;
+      const err = qtyError(qty, product?.unit);
+      if (err) {
+        alert(err);
+        return;
+      }
+      if (qty > remain) {
+        alert('Количество больше остатка в пути');
+        return;
+      }
+      items.push({ product_id: line.product_id, qty });
+    }
+    if (items.length === 0) {
+      alert('Укажите количество недостачи хотя бы по одному товару');
+      return;
+    }
+    const fingerprint = transferWriteOffFingerprint(openRow.id, items, shortageReason);
+    setBusy(true);
+    try {
+      await runInventoryOperationOnce('transfer_writeoff', fingerprint, async (operationId) => {
+        const { error } = await supabase.rpc('write_off_stock_transfer_shortage', {
+          p_operation_id: operationId,
+          p_transfer_id: openRow.id,
+          p_items: items,
+          p_reason: shortageReason.trim(),
+        });
+        if (error) throw new Error(error.message);
+      });
+      setShortageReason('');
+      await load();
+      onChanged();
+    } catch (err) {
+      alert(mapTransferRpcError(err instanceof Error ? err.message : 'Не удалось зафиксировать недостачу'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleCancel() {
-    if (busy || !openRow || openRow.status !== 'in_transit') return;
+    if (busy || !openRow || !isOpen) return;
     const fingerprint = transferCancelFingerprint(openRow.id, cancelReason);
     setBusy(true);
     try {
@@ -462,7 +549,17 @@ export default function TransfersPanel({
             >
               <div className="flex justify-between gap-2 flex-wrap">
                 <span className="font-medium text-gray-900">{t.transfer_number}</span>
-                <span className="text-sm text-gray-700">{transferStatusLabel(t.status)}</span>
+                <span className="text-sm text-gray-700">
+                  {transferOpenLabel(
+                    t.status,
+                    (t.stock_transfer_items || []).reduce(
+                      (sum, item) =>
+                        sum + transferRemaining(item.qty_sent, item.qty_received, item.qty_lost, item.qty_returned),
+                      0
+                    ),
+                    (t.stock_transfer_items || []).reduce((sum, item) => sum + Number(item.qty_received || 0), 0)
+                  )}
+                </span>
               </div>
               <p className="text-sm text-gray-600">
                 {cityName(t.from_city_id)} → {cityName(t.to_city_id)} ·{' '}
@@ -479,7 +576,9 @@ export default function TransfersPanel({
           <p className="text-sm text-gray-700 mb-1">
             {cityName(openRow.from_city_id)} → {cityName(openRow.to_city_id)}
           </p>
-          <p className="text-sm text-gray-700 mb-1">Статус: {transferStatusLabel(openRow.status)}</p>
+          <p className="text-sm text-gray-700 mb-1">
+            Статус: {transferOpenLabel(openRow.status, openRemaining, openReceived)}
+          </p>
           <p className="text-sm text-gray-700 mb-1">
             Отправка: {new Date(openRow.created_at).toLocaleString('ru-KZ')} · {who(openRow.created_by)}
           </p>
@@ -497,32 +596,51 @@ export default function TransfersPanel({
           )}
           <ul className="mb-3 space-y-2">
             {(openRow.stock_transfer_items || []).map((item) => {
-              const variance =
-                item.qty_received != null ? Number(item.qty_sent) - Number(item.qty_received) : null;
+              const remain = transferRemaining(
+                item.qty_sent,
+                item.qty_received,
+                item.qty_lost,
+                item.qty_returned
+              );
               return (
                 <li key={item.id} className="text-sm text-gray-800">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="flex-1">{productName(item, products)}</span>
                     <span>отправлено {item.qty_sent}</span>
-                    {openRow.status === 'in_transit' ? (
-                      <input
-                        type="number"
-                        className="w-24 px-2 py-1 border border-gray-300 rounded bg-white"
-                        value={recvQty[item.product_id] ?? ''}
-                        onChange={(e) => setRecvQty({ ...recvQty, [item.product_id]: e.target.value })}
-                      />
-                    ) : (
-                      <span>получено {item.qty_received ?? '—'}</span>
+                    <span>получено {item.qty_received ?? 0}</span>
+                    <span>в пути {remain}</span>
+                    {Number(item.qty_lost || 0) > 0 && (
+                      <span className="text-amber-800">недостача {item.qty_lost}</span>
                     )}
+                    {Number(item.qty_returned || 0) > 0 && <span>возвращено {item.qty_returned}</span>}
                   </div>
-                  {variance != null && variance !== 0 && (
-                    <p className="text-amber-800">Расхождение: {variance}</p>
+                  {isOpen && remain > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      <label className="flex items-center gap-1">
+                        Получить сейчас
+                        <input
+                          type="number"
+                          className="w-24 px-2 py-1 border border-gray-300 rounded bg-white"
+                          value={recvQty[item.product_id] ?? ''}
+                          onChange={(e) => setRecvQty({ ...recvQty, [item.product_id]: e.target.value })}
+                        />
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Недостача
+                        <input
+                          type="number"
+                          className="w-24 px-2 py-1 border border-gray-300 rounded bg-white"
+                          value={lostQty[item.product_id] ?? ''}
+                          onChange={(e) => setLostQty({ ...lostQty, [item.product_id]: e.target.value })}
+                        />
+                      </label>
+                    </div>
                   )}
                 </li>
               );
             })}
           </ul>
-          {openRow.status === 'in_transit' && (
+          {isOpen && (
             <div className="flex flex-col gap-2 mb-3">
               <button
                 type="button"
@@ -533,7 +651,21 @@ export default function TransfersPanel({
                 {busy ? 'Сохранение…' : 'Подтвердить получение'}
               </button>
               <input
-                placeholder="Причина отмены (необязательно)"
+                placeholder="Причина недостачи"
+                value={shortageReason}
+                onChange={(e) => setShortageReason(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
+              />
+              <button
+                type="button"
+                onClick={handleWriteOff}
+                disabled={busy}
+                className="px-4 py-2 bg-amber-700 text-white rounded-lg disabled:opacity-50"
+              >
+                Подтвердить недостачу
+              </button>
+              <input
+                placeholder="Причина отмены остатка в пути (необязательно)"
                 value={cancelReason}
                 onChange={(e) => setCancelReason(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
@@ -544,7 +676,7 @@ export default function TransfersPanel({
                 disabled={busy}
                 className="px-4 py-2 bg-red-600 text-white rounded-lg disabled:opacity-50"
               >
-                Отменить отправку
+                Вернуть остаток отправителю
               </button>
             </div>
           )}
@@ -560,7 +692,9 @@ export default function TransfersPanel({
                   {e.action === 'cancelled' && e.details && typeof e.details.reason === 'string' && e.details.reason
                     ? ` · ${e.details.reason}`
                     : ''}
-                  {e.action === 'received_with_variance' ? ' · расхождение сохранено' : ''}
+                  {e.action === 'shortage' && e.details && typeof e.details.reason === 'string'
+                    ? ` · ${e.details.reason}`
+                    : ''}
                 </li>
               ))}
             </ul>
