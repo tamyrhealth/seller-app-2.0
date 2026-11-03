@@ -3,6 +3,7 @@ import { join } from 'path';
 import { formatChatNumber } from '../lib/chatNumber';
 import { isCanceledStatus, orderStatusI18nKey } from '../lib/orderStatus';
 import { runExclusive } from '../lib/exclusiveAsync';
+import { safeMarkdownUrl } from '../lib/assistant/markdownUrl';
 
 function fail(msg: string): never {
   console.error(msg);
@@ -114,6 +115,25 @@ if (!chatsUi.includes('/api/assistant/chat')) fail('UI must call server assistan
 if (!chatsUi.includes('Повторить запрос к ИИ')) fail('retry control');
 if (!chatsUi.includes('ИИ отвечает')) fail('loading state');
 if (!chatsUi.includes('runExclusive')) fail('double-click empty chat must be serialized in UI');
+if (!chatsUi.includes('AssistantMarkdown')) fail('assistant replies must use shared markdown component');
+if (chatsUi.includes('dangerouslySetInnerHTML')) fail('chat UI must not use inner HTML');
+if (chatsUi.includes('rehype-raw')) fail('must not parse raw HTML from the model');
+
+const mdUi = readFileSync(join(process.cwd(), 'components', 'AssistantMarkdown.tsx'), 'utf8');
+if (!mdUi.includes('react-markdown')) fail('AssistantMarkdown must use react-markdown');
+if (!mdUi.includes('remark-gfm')) fail('GFM tables/lists required');
+if (mdUi.includes('rehype-raw') || mdUi.includes('dangerouslySetInnerHTML')) fail('unsafe HTML rendering');
+if (!mdUi.includes('skipHtml')) fail('HTML in markdown must be skipped');
+if (!mdUi.includes('safeMarkdownUrl')) fail('link URLs must be filtered');
+if (!mdUi.includes('overflow-x-auto')) fail('tables/code must scroll instead of breaking the bubble');
+
+const pkgJson = readFileSync(join(process.cwd(), 'package.json'), 'utf8');
+if (!pkgJson.includes('"react-markdown"') || !pkgJson.includes('"remark-gfm"')) fail('markdown packages missing');
+
+if (safeMarkdownUrl('javascript:alert(1)') !== '') fail('javascript URLs must be blocked');
+if (safeMarkdownUrl('data:text/html,x') !== '') fail('data URLs must be blocked');
+if (safeMarkdownUrl('https://example.com/a') !== 'https://example.com/a') fail('https links must pass');
+if (safeMarkdownUrl('mailto:a@b.c') !== 'mailto:a@b.c') fail('mailto must pass');
 
 if (inventoryUi.includes('cost_price') || managerInv.includes('cost_price')) fail('manager inventory must not read cost_price');
 if (inventoryUi.includes('Итого по КЗ') || managerInv.includes('Итого по КЗ')) fail('KZ money total must not appear');

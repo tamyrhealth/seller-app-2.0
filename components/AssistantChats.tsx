@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabaseClient';
 import { runExclusive } from '@/lib/exclusiveAsync';
 import { displayChatNumber } from '@/lib/chatNumber';
+import AssistantMarkdown from '@/components/AssistantMarkdown';
 
 type ChatRow = {
   id: string;
@@ -289,11 +290,15 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                   return (
                     <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                       <div
-                        className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+                        className={`max-w-[85%] min-w-0 rounded-2xl px-3 py-2 text-sm ${
                           mine ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-900'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap">{m.content}</p>
+                        {mine ? (
+                          <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                        ) : (
+                          <AssistantMarkdown content={m.content} />
+                        )}
                         <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>
                           {formatMsgTime(m.created_at)}
                         </p>
