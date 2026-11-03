@@ -50,8 +50,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const [rename, setRename] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [waitingAi, setWaitingAi] = useState(false);
+  const [retry, setRetry] = useState<{ content: string; clientMessageId: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const readOnly = audit;
+  const sendingRef = useRef(false);
 
   const loadChats = useCallback(async () => {
     const selectFull = 'id, owner_id, title, updated_at, chat_number, message_count';
@@ -153,34 +156,70 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     else await loadChats();
   }
 
-  async function send() {
-    if (!openId || !profile?.id || readOnly || busy) return;
-    const content = draft.trim();
-    if (!content) return;
-    setBusy(true);
-    const clientMessageId = crypto.randomUUID();
-    const { error: err } = await supabase.from('assistant_messages').insert({
-      chat_id: openId,
-      author_id: profile.id,
-      role: 'user',
-      content,
-      client_message_id: clientMessageId,
-      metadata: { source: 'assistant_ui' },
-    });
-    if (err && err.code !== '23505' && !err.message.toLowerCase().includes('duplicate')) {
-      setError(err.message);
-      setBusy(false);
-      return;
-    }
-    setDraft('');
-    const { data } = await supabase
+  async function reloadMessages(chatId: string) {
+    const { data, error: err } = await supabase
       .from('assistant_messages')
       .select('id, role, content, created_at')
-      .eq('chat_id', openId)
+      .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
-    setMessages((data || []) as MsgRow[]);
+    if (err) setError(err.message);
+    else setMessages((data || []) as MsgRow[]);
+  }
+
+  async function requestAssistant(chatId: string, content: string, clientMessageId: string) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) {
+      setError('Сессия истекла. Войдите снова.');
+      setRetry({ content, clientMessageId });
+      return;
+    }
+    const res = await fetch('/api/assistant/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ chatId, content, clientMessageId }),
+    });
+    const payload = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      message?: string;
+      retryable?: boolean;
+    };
+    await reloadMessages(chatId);
     await loadChats();
-    setBusy(false);
+    if (!res.ok || payload.ok === false) {
+      setError(payload.message || 'Не удалось получить ответ ИИ.');
+      if (payload.retryable !== false) setRetry({ content, clientMessageId });
+      else setRetry(null);
+      return;
+    }
+    setError('');
+    setRetry(null);
+  }
+
+  async function send(existing?: { content: string; clientMessageId: string }) {
+    if (!openId || !profile?.id || readOnly || busy || sendingRef.current) return;
+    const content = (existing?.content || draft).trim();
+    if (!content) return;
+    const clientMessageId = existing?.clientMessageId || crypto.randomUUID();
+    sendingRef.current = true;
+    setBusy(true);
+    setWaitingAi(true);
+    setError('');
+    if (!existing) setDraft('');
+    try {
+      await runExclusive(`assistant-send:${openId}`, () => requestAssistant(openId, content, clientMessageId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+      setRetry({ content, clientMessageId });
+      await reloadMessages(openId);
+    } finally {
+      sendingRef.current = false;
+      setBusy(false);
+      setWaitingAi(false);
+    }
   }
 
   const open = chats.find((c) => c.id === openId) || null;
@@ -240,9 +279,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                 )}
               </div>
             </div>
-            <p className="text-xs text-amber-800 mb-2">
-              ИИ пока не подключён (этап 5.2). Сообщения пользователя сохраняются; ответов модели нет.
-            </p>
+            {waitingAi ? <p className="text-xs text-blue-800 mb-2">ИИ отвечает…</p> : null}
             <div className="flex-1 overflow-y-auto space-y-2 mb-2">
               {messages.length === 0 ? (
                 <p className="text-sm text-gray-600">Сообщений нет</p>
@@ -268,31 +305,44 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
               <div ref={bottomRef} />
             </div>
             {!readOnly && (
-              <div className="flex gap-2 items-end">
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                  rows={3}
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
-                  placeholder="Сообщение"
-                />
-                <button
-                  type="button"
-                  disabled={busy || !draft.trim()}
-                  onClick={() => void send()}
-                  aria-label="Отправить"
-                  className="h-11 w-11 shrink-0 flex items-center justify-center rounded-full bg-blue-600 text-white disabled:opacity-50"
-                >
-                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
-                    <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
-                  </svg>
-                </button>
+              <div className="space-y-2">
+                {retry ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void send(retry)}
+                    className="px-3 py-2 bg-amber-100 text-amber-950 rounded-lg text-sm disabled:opacity-50"
+                  >
+                    Повторить запрос к ИИ
+                  </button>
+                ) : null}
+                <div className="flex gap-2 items-end">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void send();
+                      }
+                    }}
+                    rows={3}
+                    disabled={busy}
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
+                    placeholder="Сообщение"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !draft.trim()}
+                    onClick={() => void send()}
+                    aria-label="Отправить"
+                    className="h-11 w-11 shrink-0 flex items-center justify-center rounded-full bg-blue-600 text-white disabled:opacity-50"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
+                      <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             )}
           </>

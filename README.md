@@ -21,7 +21,12 @@
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://ваш-проект.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=ваш-anon-key
+SUPABASE_SERVICE_ROLE_KEY=ваш-service-role-key
+OPENAI_API_KEY=ваш-openai-ключ
+OPENAI_MODEL=gpt-4o-mini
 ```
+
+`OPENAI_API_KEY` и `SUPABASE_SERVICE_ROLE_KEY` только на сервере (Vercel Environment Variables). Не добавляйте их с префиксом `NEXT_PUBLIC_`.
 
 ### 3. Выполнить SQL миграцию
 

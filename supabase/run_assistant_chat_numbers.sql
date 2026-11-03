@@ -115,11 +115,6 @@ BEGIN
   IF NEW.chat_number IS DISTINCT FROM OLD.chat_number THEN
     RAISE EXCEPTION 'Cannot change chat number';
   END IF;
-  -- Client UPDATE must not fake empty/filled chats. Nested trigger from
-  -- assistant_messages_touch_chat (pg_trigger_depth >= 2) may increment.
-  IF NEW.message_count IS DISTINCT FROM OLD.message_count AND pg_trigger_depth() < 2 THEN
-    RAISE EXCEPTION 'Cannot change message_count';
-  END IF;
   RETURN NEW;
 END;
 $$;
@@ -134,7 +129,8 @@ CREATE OR REPLACE FUNCTION public.assistant_messages_touch_chat()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, auth
+SET row_security = off
 AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
@@ -226,5 +222,8 @@ REVOKE ALL ON FUNCTION public.open_empty_assistant_chat() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.open_empty_assistant_chat() TO authenticated, service_role;
 REVOKE ALL ON SEQUENCE public.assistant_chats_chat_number_seq FROM PUBLIC, anon, authenticated;
 GRANT USAGE, SELECT ON SEQUENCE public.assistant_chats_chat_number_seq TO postgres, service_role;
+
+REVOKE UPDATE ON TABLE public.assistant_chats FROM authenticated;
+GRANT UPDATE (title, archived_at, updated_at) ON TABLE public.assistant_chats TO authenticated;
 
 COMMIT;

@@ -35,8 +35,11 @@ if (!sql.includes("open_empty_assistant_chat")) fail('empty-chat RPC required');
 if (!sql.includes('pg_advisory_xact_lock')) fail('empty-chat RPC must lock per owner');
 if (!sql.includes('assistant_chats_one_empty_per_owner_uidx')) fail('unique empty chat per owner');
 if (!sql.includes('Cannot change chat number')) fail('chat_number must be immutable');
-if (!sql.includes('Cannot change message_count')) fail('message_count must not be client-writable');
-if (!sql.includes('pg_trigger_depth()')) fail('message_count updates must be trigger-nested only');
+if (sql.includes('pg_trigger_depth()')) fail('message insert must not depend on pg_trigger_depth');
+if (!sql.includes('GRANT UPDATE (title, archived_at, updated_at)')) {
+  fail('authenticated must not have table-level UPDATE including message_count');
+}
+if (!sql.includes('SET row_security = off')) fail('touch_chat must bypass RLS when incrementing message_count');
 if (!sql.includes('VALUES (v_uid, \'Новый диалог\')')) fail('RPC insert must use auth.uid() as owner');
 if (!sql.includes('owner_id = v_uid')) fail('RPC must create chats only for auth.uid()');
 if (!sql.includes('is_assistant_user()')) fail('RPC must reject sellers');
@@ -49,6 +52,34 @@ if (/UPDATE\s+public\.(orders|inventory|profiles|products)\s+SET/i.test(sql)) {
 }
 if (!runSql.includes('open_empty_assistant_chat')) fail('run SQL must include RPC');
 if (!runSql.includes('assistant_chats_one_empty_per_owner_uidx')) fail('run SQL must include unique empty index');
+if (runSql.includes('pg_trigger_depth()')) fail('run 5.1.1 SQL must not keep pg_trigger_depth guard');
+
+const hotfix = readFileSync(
+  join(process.cwd(), 'supabase', 'migrations', '20261103270000_fix_assistant_message_count_guard.sql'),
+  'utf8'
+);
+const hotfixRun = readFileSync(
+  join(process.cwd(), 'supabase', 'run_fix_assistant_message_count_guard.sql'),
+  'utf8'
+);
+if (!/^BEGIN;/m.test(hotfix) || !/^COMMIT;/m.test(hotfix)) fail('hotfix must be transactional');
+if (hotfix.includes('pg_trigger_depth()')) fail('hotfix must not use pg_trigger_depth');
+if (!hotfix.includes('GRANT UPDATE (title, archived_at, updated_at)')) {
+  fail('hotfix must restrict authenticated UPDATE columns');
+}
+if (!hotfix.includes('SET row_security = off')) fail('hotfix touch_chat must set row_security off');
+if (/DELETE\s+FROM\s+public\.assistant_messages/i.test(hotfix)) fail('hotfix must not delete messages');
+if (!hotfixRun.includes('GRANT UPDATE (title, archived_at, updated_at)')) fail('run hotfix SQL missing column grants');
+
+const hotfixVerify = readFileSync(
+  join(process.cwd(), 'supabase', 'prod', 'post_apply_verify_block511_hotfix.sql'),
+  'utf8'
+);
+const hotfixVerifyBare = hotfixVerify.replace(/--.*$/gm, '').replace(/'[^']*'/g, "''");
+if (/^\s*(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/im.test(hotfixVerifyBare)) {
+  fail('post_apply_verify_block511_hotfix.sql must be SELECT-only');
+}
+if (/\bpolname\b/.test(hotfixVerify)) fail('hotfix verify must use policyname, not polname');
 
 const verifyBare = verify.replace(/--.*$/gm, '').replace(/'[^']*'/g, "''");
 if (/^\s*(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/im.test(verifyBare)) {
@@ -78,8 +109,10 @@ if (!chatsUi.includes('Shift') && !chatsUi.includes('shiftKey')) fail('Shift+Ent
 if (!chatsUi.includes('scrollIntoView')) fail('auto-scroll');
 if (!chatsUi.includes('justify-end')) fail('user messages on the right');
 if (chatsUi.includes('Текст сохранится в истории диалога')) fail('old placeholder must go');
-if (!chatsUi.includes('ИИ пока не подключён')) fail('honest AI-offline banner');
-if (!chatsUi.includes('23505')) fail('message idempotency must remain');
+if (chatsUi.includes('ИИ пока не подключён')) fail('offline AI banner must be removed after 5.2.1');
+if (!chatsUi.includes('/api/assistant/chat')) fail('UI must call server assistant route');
+if (!chatsUi.includes('Повторить запрос к ИИ')) fail('retry control');
+if (!chatsUi.includes('ИИ отвечает')) fail('loading state');
 if (!chatsUi.includes('runExclusive')) fail('double-click empty chat must be serialized in UI');
 
 if (inventoryUi.includes('cost_price') || managerInv.includes('cost_price')) fail('manager inventory must not read cost_price');
