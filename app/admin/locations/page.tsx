@@ -8,6 +8,7 @@ import {
 } from '@/lib/inventoryOperation';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TransfersPanel from '@/components/TransfersPanel';
 import { supabase } from '@/lib/supabaseClient';
 import type { City } from '@/lib/types';
 import type { Product } from '@/lib/types';
@@ -412,6 +413,17 @@ export default function AdminLocationsPage() {
             </button>
           </div>
 
+          <TransfersPanel
+            cities={cities}
+            products={products}
+            selectedCity={selectedCity}
+            onChanged={async () => {
+              if (selectedCity === 'ALL') await loadInventoryAll();
+              else if (selectedCity) await loadInventory(selectedCity);
+              await loadMovements(selectedCity);
+            }}
+          />
+
           {cityActionError && (
             <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm">{cityActionError}</div>
           )}
@@ -675,7 +687,13 @@ export default function AdminLocationsPage() {
                               ? 'продажа'
                               : m.type === 'cancel_sale'
                                 ? 'отмена продажи'
-                                : m.type;
+                                : m.type === 'transfer_out'
+                                  ? 'перемещение (отправка)'
+                                  : m.type === 'transfer_in'
+                                    ? 'перемещение (получение)'
+                                    : m.type === 'transfer_cancel'
+                                      ? 'перемещение (отмена)'
+                                      : m.type;
                       return (
                         <li key={m.id}>
                           {when} · {typeLabel} · {productName} · {cityName} · {m.qty_delta} · {who}

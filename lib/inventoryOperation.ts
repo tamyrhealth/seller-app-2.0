@@ -1,7 +1,14 @@
 const STORE_KEY = 'seller-app:inventory-op:v1';
 const TAB_KEY = 'seller-app:inventory-op-tab';
 
-type Kind = 'restock' | 'adjust';
+export type InventoryOpKind =
+  | 'restock'
+  | 'adjust'
+  | 'transfer_create'
+  | 'transfer_receive'
+  | 'transfer_cancel';
+
+type Kind = InventoryOpKind;
 
 type Op = {
   key: string;
@@ -72,6 +79,42 @@ export function inventoryRestockFingerprint(cityId: string, productId: string, q
 
 export function inventoryAdjustFingerprint(cityId: string, productId: string, newQty: number): string {
   return JSON.stringify({ kind: 'adjust', cityId, productId, qty: Number(newQty.toFixed(3)) });
+}
+
+function roundQty(qty: number): number {
+  return Number(qty.toFixed(3));
+}
+
+export function transferCreateFingerprint(
+  fromCityId: string,
+  toCityId: string,
+  items: Array<{ product_id: string; qty: number }>,
+  comment: string
+): string {
+  const normalized = [...items]
+    .map((i) => ({ product_id: i.product_id, qty: roundQty(i.qty) }))
+    .sort((a, b) => a.product_id.localeCompare(b.product_id));
+  return JSON.stringify({
+    kind: 'transfer_create',
+    fromCityId,
+    toCityId,
+    items: normalized,
+    comment: comment.trim(),
+  });
+}
+
+export function transferReceiveFingerprint(
+  transferId: string,
+  items: Array<{ product_id: string; qty_received: number }>
+): string {
+  const normalized = [...items]
+    .map((i) => ({ product_id: i.product_id, qty_received: roundQty(i.qty_received) }))
+    .sort((a, b) => a.product_id.localeCompare(b.product_id));
+  return JSON.stringify({ kind: 'transfer_receive', transferId, items: normalized });
+}
+
+export function transferCancelFingerprint(transferId: string, reason: string): string {
+  return JSON.stringify({ kind: 'transfer_cancel', transferId, reason: reason.trim() });
 }
 
 export function getOrCreateInventoryOperationId(kind: Kind, fingerprint: string): string {
