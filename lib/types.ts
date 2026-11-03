@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'seller';
+export type Role = 'admin' | 'seller' | 'manager';
 
 export type City = {
   id: string;
@@ -13,6 +13,7 @@ export type Profile = {
   role: Role;
   city_id: string | null;
   is_active?: boolean;
+  can_cancel_orders?: boolean;
 };
 
 export type PaymentType = 'cash' | 'kaspi' | 'card' | 'transfer' | 'debt';

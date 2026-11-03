@@ -16,6 +16,8 @@ export default function HomePage() {
     }
     if (profile.role === 'admin') {
       router.replace('/admin');
+    } else if (profile.role === 'manager') {
+      router.replace('/manager');
     } else {
       router.replace('/seller');
     }

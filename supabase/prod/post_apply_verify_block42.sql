@@ -15,10 +15,28 @@ WHERE conrelid = 'public.products'::regclass
   AND conname = 'products_cost_price_check';
 
 SELECT
-  has_column_privilege('anon', 'public.products', 'cost_price', 'SELECT') AS anon_select_cost,
+  has_table_privilege('authenticated', 'public.products', 'SELECT') AS authenticated_table_select,
+  has_column_privilege('authenticated', 'public.products', 'name', 'SELECT') AS authenticated_select_name,
+  has_column_privilege('authenticated', 'public.products', 'price_retail', 'SELECT') AS authenticated_select_retail,
+  has_column_privilege('authenticated', 'public.products', 'sort_order', 'SELECT') AS authenticated_select_sort,
   has_column_privilege('authenticated', 'public.products', 'cost_price', 'SELECT') AS authenticated_select_cost,
   has_column_privilege('authenticated', 'public.products', 'cost_price', 'UPDATE') AS authenticated_update_cost,
-  has_column_privilege('authenticated', 'public.products', 'cost_price', 'INSERT') AS authenticated_insert_cost;
+  has_column_privilege('authenticated', 'public.products', 'cost_price', 'INSERT') AS authenticated_insert_cost,
+  has_column_privilege('anon', 'public.products', 'name', 'SELECT') AS anon_select_name,
+  has_column_privilege('anon', 'public.products', 'cost_price', 'SELECT') AS anon_select_cost,
+  has_column_privilege('anon', 'public.products', 'cost_price', 'UPDATE') AS anon_update_cost;
+
+SELECT grantee, privilege_type
+FROM information_schema.column_privileges
+WHERE table_schema = 'public'
+  AND table_name = 'products'
+  AND column_name = 'cost_price'
+ORDER BY 1, 2;
+
+SELECT c.relacl
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname = 'products';
 
 SELECT p.proname,
        pg_get_function_identity_arguments(p.oid) AS args,

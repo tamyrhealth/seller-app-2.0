@@ -13,13 +13,30 @@ ALTER TABLE public.products
 ALTER TABLE public.products
   ADD CONSTRAINT products_cost_price_check CHECK (cost_price IS NULL OR cost_price >= 0);
 
--- Table-level GRANT ALL would otherwise expose the new column via SELECT *.
--- Sellers and anon keep catalog columns; they cannot SELECT cost_price.
--- Admin writes cost_price via existing products_all_admin RLS + column UPDATE.
--- Admin reads cost_price only through admin_product_costs() (SECURITY DEFINER).
-REVOKE ALL ON COLUMN public.products.cost_price FROM PUBLIC, anon, authenticated;
-GRANT INSERT, UPDATE ON COLUMN public.products.cost_price TO authenticated;
-GRANT ALL ON COLUMN public.products.cost_price TO service_role;
+-- PostgreSQL has no "REVOKE ALL ON COLUMN table.col" (SQLSTATE 42601).
+-- Table-level GRANT SELECT/ALL includes future columns, so REVOKE SELECT (cost_price)
+-- cannot hide cost_price while GRANT SELECT ON TABLE products remains.
+-- Replace table-level grants with catalog column lists; cost_price is not selectable
+-- by anon/authenticated. Admin reads it only via admin_product_costs() (SECURITY DEFINER).
+-- Writes to cost_price stay on authenticated + existing products_all_admin RLS.
+REVOKE ALL ON TABLE public.products FROM PUBLIC;
+REVOKE ALL ON TABLE public.products FROM anon;
+REVOKE ALL ON TABLE public.products FROM authenticated;
+
+GRANT SELECT (
+  id, name, category, unit, price_retail, is_active, created_at, sort_order
+) ON TABLE public.products TO anon, authenticated;
+
+GRANT INSERT (
+  id, name, category, unit, price_retail, is_active, created_at, sort_order, cost_price
+) ON TABLE public.products TO authenticated;
+
+GRANT UPDATE (
+  id, name, category, unit, price_retail, is_active, created_at, sort_order, cost_price
+) ON TABLE public.products TO authenticated;
+
+GRANT DELETE ON TABLE public.products TO authenticated;
+GRANT ALL ON TABLE public.products TO service_role;
 
 CREATE OR REPLACE FUNCTION public.admin_product_costs()
 RETURNS TABLE(id uuid, cost_price numeric)

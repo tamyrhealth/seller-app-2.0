@@ -6,12 +6,12 @@ import { useAuth } from '@/lib/auth';
 import { useTranslation } from '@/lib/i18n';
 import { checkActiveDevice } from '@/lib/activeSession';
 import { getOrCreateDeviceId } from '@/lib/deviceId';
-
-type AllowedRole = 'admin' | 'seller';
+import { homePathForRole, roleMatches } from '@/lib/roles';
+import type { Role } from '@/lib/types';
 
 interface ProtectedProps {
   children: React.ReactNode;
-  role?: AllowedRole;
+  role?: Role | Role[];
 }
 
 export default function Protected({ children, role }: ProtectedProps) {
@@ -32,15 +32,14 @@ export default function Protected({ children, role }: ProtectedProps) {
       router.replace('/auth/sign-in');
       return;
     }
-    if (role && profile && profile.role !== role) {
-      if (profile.role === 'admin') router.replace('/admin');
-      else router.replace('/seller');
+    if (role && profile && !roleMatches(role, profile.role)) {
+      router.replace(homePathForRole(profile.role));
     }
   }, [authReady, session, profile, role, router]);
 
   useEffect(() => {
     if (!authReady || !session?.user?.id || !profile || profile.is_active === false) return;
-    if (role && profile.role !== role) return;
+    if (role && !roleMatches(role, profile.role)) return;
     if (checkDoneRef.current) return;
     checkDoneRef.current = true;
 
@@ -89,14 +88,12 @@ export default function Protected({ children, role }: ProtectedProps) {
     return null;
   }
 
-  if (role && profile.role !== role) {
+  if (role && !roleMatches(role, profile.role)) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-4">
         <p className="text-center text-gray-700">Нет доступа</p>
         <button
-          onClick={() =>
-            profile.role === 'admin' ? router.push('/admin') : router.push('/seller')
-          }
+          onClick={() => router.push(homePathForRole(profile.role))}
           className="px-6 py-2 rounded-lg bg-blue-600 text-white"
         >
           На главную

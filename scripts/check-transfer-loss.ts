@@ -28,9 +28,17 @@ if (!sql.trim().startsWith('--') && !sql.includes('BEGIN;')) fail('migration mus
 if (!/^BEGIN;/m.test(sql) || !/^COMMIT;/m.test(sql)) fail('migration must be BEGIN/COMMIT');
 if (!sql.includes('ADD COLUMN IF NOT EXISTS cost_price')) fail('migration must add products.cost_price');
 if (!sql.includes('cost_price IS NULL OR cost_price >= 0')) fail('cost_price must allow NULL and reject negatives');
-if (!sql.includes('REVOKE ALL ON COLUMN public.products.cost_price')) {
-  fail('cost_price must be revoked from table-level GRANT ALL');
+if (/^\s*REVOKE ALL ON COLUMN/im.test(sql)) fail('PostgreSQL does not support REVOKE ALL ON COLUMN');
+if (!sql.includes('REVOKE ALL ON TABLE public.products FROM authenticated')) {
+  fail('must drop table-level grants; column REVOKE cannot hide cost_price');
 }
+if (
+  !sql.includes('GRANT SELECT (') ||
+  !sql.includes('id, name, category, unit, price_retail, is_active, created_at, sort_order')
+) {
+  fail('catalog columns must stay selectable without cost_price');
+}
+if (/GRANT SELECT \([^)]*cost_price/i.test(sql)) fail('must not GRANT SELECT on cost_price');
 if (!sql.includes('admin_product_costs')) fail('admin must read cost via SECURITY DEFINER rpc');
 if (!sql.includes('unit_cost')) fail('write-off must snapshot unit_cost');
 if (!sql.includes('to_jsonb(p.cost_price)')) fail('unknown cost must snapshot as JSON null, not omitted');

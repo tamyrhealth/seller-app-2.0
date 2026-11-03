@@ -56,6 +56,8 @@ function SignInContent() {
 
       if (profile.role === 'admin') {
         router.push('/admin');
+      } else if (profile.role === 'manager') {
+        router.push('/manager');
       } else {
         router.push('/seller');
       }

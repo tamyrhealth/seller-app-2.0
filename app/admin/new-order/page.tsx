@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import NavManager from '@/components/NavManager';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/auth';
 import { isSessionError } from '@/lib/supabaseHelpers';
@@ -362,6 +363,9 @@ export default function AdminNewOrderPage() {
           if (rpcError.message.includes('Idempotency key reused')) {
             invalidateOrderIdempotencyKey(profile.id, idempotencyKey);
           }
+          if (rpcError.message.includes('Invalid role')) {
+            throw new Error('Сначала примените SQL этапа 5.1. Создание заказов менеджером станет доступно после миграции.');
+          }
           throw rpcError;
         }
         if (!data) {
@@ -379,7 +383,9 @@ export default function AdminNewOrderPage() {
       setDebtDueAt('');
       setDebtNote('');
       router.refresh();
-      router.push(`/admin/orders${orderId ? `?id=${orderId}` : ''}`);
+      router.push(
+        `${profile.role === 'manager' ? '/manager/orders' : '/admin/orders'}${orderId ? `?id=${orderId}` : ''}`
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : t('common.error');
       if (!isSessionError(err as { message?: string })) {
@@ -392,11 +398,15 @@ export default function AdminNewOrderPage() {
   }
 
   return (
-    <Protected role="admin">
+    <Protected role={['admin', 'manager']}>
       <div className="min-h-screen pb-24 md:pb-4 w-full max-w-full overflow-x-hidden bg-white">
+        {profile?.role === 'manager' ? <NavManager /> : null}
         <div className="p-3 sm:p-4 w-full max-w-full min-w-0">
           <div className="flex items-center gap-2 mb-3 sm:mb-4">
-            <Link href="/admin" className="text-blue-600 font-medium text-sm">
+            <Link
+              href={profile?.role === 'manager' ? '/manager' : '/admin'}
+              className="text-blue-600 font-medium text-sm"
+            >
               {t('common.back')}
             </Link>
           </div>
@@ -699,7 +709,7 @@ export default function AdminNewOrderPage() {
             </div>
           )}
         </div>
-        <NavAdmin />
+        {profile?.role === 'admin' ? <NavAdmin /> : null}
       </div>
     </Protected>
   );

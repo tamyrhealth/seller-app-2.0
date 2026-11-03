@@ -16,15 +16,17 @@ export default function AdminUsersPage() {
   const [linkForm, setLinkForm] = useState({
     user_id: '',
     display_name: '',
-    role: 'seller' as 'admin' | 'seller',
+    role: 'seller' as Profile['role'],
     city_id: '',
     is_active: true,
+    can_cancel_orders: false,
   });
   const [editForm, setEditForm] = useState({
     display_name: '',
-    role: 'seller' as 'admin' | 'seller',
+    role: 'seller' as Profile['role'],
     city_id: '',
     is_active: true,
+    can_cancel_orders: false,
   });
 
   useEffect(() => {
@@ -47,19 +49,29 @@ export default function AdminUsersPage() {
       return;
     }
 
-    const { error } = await supabase.from('profiles').upsert(
-      {
-        id: linkForm.user_id,
-        display_name: linkForm.display_name,
-        role: linkForm.role,
-        city_id: linkForm.city_id || null,
-        is_active: linkForm.is_active,
-      },
-      { onConflict: 'id' }
-    );
+    const linkPayload: Record<string, unknown> = {
+      id: linkForm.user_id,
+      display_name: linkForm.display_name,
+      role: linkForm.role,
+      city_id: linkForm.city_id || null,
+      is_active: linkForm.is_active,
+    };
+    if (linkForm.role === 'manager') {
+      linkPayload.can_cancel_orders = linkForm.can_cancel_orders;
+    }
+
+    const { error } = await supabase.from('profiles').upsert(linkPayload, { onConflict: 'id' });
 
     if (error) {
-      alert(error.message);
+      if (
+        error.message.includes('can_cancel_orders') ||
+        error.message.includes('manager') ||
+        error.message.includes('profiles_role_check')
+      ) {
+        alert('Сначала примените SQL этапа 5.1, затем назначьте роль manager.');
+      } else {
+        alert(error.message);
+      }
       return;
     }
 
@@ -69,6 +81,7 @@ export default function AdminUsersPage() {
       role: 'seller',
       city_id: '',
       is_active: true,
+      can_cancel_orders: false,
     });
     setShowLinkForm(false);
     load();
@@ -77,18 +90,28 @@ export default function AdminUsersPage() {
   async function handleEdit() {
     if (!editProfile) return;
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        display_name: editForm.display_name,
-        role: editForm.role,
-        city_id: editForm.city_id || null,
-        is_active: editForm.is_active,
-      })
-      .eq('id', editProfile.id);
+    const editPayload: Record<string, unknown> = {
+      display_name: editForm.display_name,
+      role: editForm.role,
+      city_id: editForm.city_id || null,
+      is_active: editForm.is_active,
+    };
+    if (editForm.role === 'manager') {
+      editPayload.can_cancel_orders = editForm.can_cancel_orders;
+    }
+
+    const { error } = await supabase.from('profiles').update(editPayload).eq('id', editProfile.id);
 
     if (error) {
-      alert(error.message);
+      if (
+        error.message.includes('can_cancel_orders') ||
+        error.message.includes('manager') ||
+        error.message.includes('profiles_role_check')
+      ) {
+        alert('Сначала примените SQL этапа 5.1, затем назначьте роль manager.');
+      } else {
+        alert(error.message);
+      }
       return;
     }
 
@@ -151,12 +174,13 @@ export default function AdminUsersPage() {
                 onChange={(e) =>
                   setLinkForm({
                     ...linkForm,
-                    role: e.target.value as 'admin' | 'seller',
+                    role: e.target.value as Profile['role'],
                   })
                 }
                 className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="seller">Продавец</option>
+                <option value="manager">Менеджер</option>
                 <option value="admin">Админ</option>
               </select>
               <select
@@ -179,6 +203,16 @@ export default function AdminUsersPage() {
                 />
                 Активен
               </label>
+              {linkForm.role === 'manager' && (
+                <label className="flex items-center gap-2 mb-2 text-gray-900">
+                  <input
+                    type="checkbox"
+                    checked={linkForm.can_cancel_orders}
+                    onChange={(e) => setLinkForm({ ...linkForm, can_cancel_orders: e.target.checked })}
+                  />
+                  Разрешить отмену заказов
+                </label>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={handleLink}
@@ -208,11 +242,12 @@ export default function AdminUsersPage() {
               <select
                 value={editForm.role}
                 onChange={(e) =>
-                  setEditForm({ ...editForm, role: e.target.value as 'admin' | 'seller' })
+                  setEditForm({ ...editForm, role: e.target.value as Profile['role'] })
                 }
                 className="w-full px-3 py-2 border border-gray-300 rounded mb-2 bg-white text-gray-900"
               >
                 <option value="seller">Продавец</option>
+                <option value="manager">Менеджер</option>
                 <option value="admin">Админ</option>
               </select>
               <select
@@ -235,6 +270,16 @@ export default function AdminUsersPage() {
                 />
                 Активен
               </label>
+              {editForm.role === 'manager' && (
+                <label className="flex items-center gap-2 mb-2 text-gray-900">
+                  <input
+                    type="checkbox"
+                    checked={editForm.can_cancel_orders}
+                    onChange={(e) => setEditForm({ ...editForm, can_cancel_orders: e.target.checked })}
+                  />
+                  Разрешить отмену заказов
+                </label>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={handleEdit}
@@ -278,6 +323,7 @@ export default function AdminUsersPage() {
                         role: p.role,
                         city_id: p.city_id || '',
                         is_active: p.is_active ?? true,
+                        can_cancel_orders: p.can_cancel_orders === true,
                       });
                     }}
                     className="px-3 py-1 bg-blue-600 text-white rounded text-sm"
