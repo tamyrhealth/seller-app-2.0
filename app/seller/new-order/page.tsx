@@ -11,6 +11,12 @@ import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { logAction } from '@/lib/actionLog';
+import {
+  buildClientOrderFingerprint,
+  getOrCreateOrderIdempotencyKey,
+  invalidateOrderIdempotencyKey,
+  markOrderIdempotencyConfirmed,
+} from '@/lib/orderIdempotency';
 import type { Product, PaymentType } from '@/lib/types';
 
 function formatMoney(n: number) {
@@ -229,24 +235,46 @@ export default function NewOrderPage() {
       const isPreorderToggle = orderType === 'preorder';
       const pickedDate = pickupDate && pickupDate.trim() !== '' ? pickupDate.trim() : null;
 
+      const pickup = isPreorderToggle ? (pickedDate ?? todayYYYYMMDD) : null;
+      const debtName = isDebtToggle ? (debtCustomerName ?? '').toString().trim() || null : null;
+      const debtDue = isDebtToggle ? (debtDueAt ?? '').toString().trim() || null : null;
+      const debtNoteVal = isDebtToggle ? (debtNote ?? '').toString().trim() || null : null;
+      const commentVal = isDebtToggle ? null : comment || null;
+      const paymentVal = isDebtToggle ? 'debt' : paymentType || null;
+
       const payload: Record<string, unknown> = {
         items,
-        payment_type: isDebtToggle ? 'debt' : paymentType || null,
-        comment: isDebtToggle ? null : comment || null,
-        is_preorder: isPreorderToggle,
-        preorder_status: isPreorderToggle ? 'pending' : undefined,
-        pickup_date: isPreorderToggle ? (pickedDate ?? todayYYYYMMDD) : null,
+        payment_type: paymentVal,
+        comment: commentVal,
+        is_preorder: isPreorderToggle && !isDebtToggle,
+        pickup_date: isDebtToggle ? null : pickup,
       };
 
       if (isDebtToggle) {
         payload.is_debt = true;
-        payload.payment_type = 'debt';
-        payload.debt_status = 'active';
         payload.debt_customer_phone = phone;
-        payload.is_preorder = false;
-        payload.preorder_status = undefined;
-        payload.pickup_date = null;
+        payload.debt_customer_name = debtName;
+        payload.debt_due_at = debtDue;
+        payload.debt_note = debtNoteVal;
       }
+
+      const fingerprint = buildClientOrderFingerprint({
+        actorUserId: profile.id,
+        sellerId: profile.id,
+        cityId,
+        isPreorder: Boolean(payload.is_preorder),
+        isDebt: isDebtToggle,
+        paymentType: paymentVal,
+        comment: commentVal,
+        pickupDate: pickup,
+        debtCustomerPhone: isDebtToggle ? phone : null,
+        debtCustomerName: debtName,
+        debtDueAt: debtDue,
+        debtNote: debtNoteVal,
+        items,
+      });
+      const idempotencyKey = getOrCreateOrderIdempotencyKey(profile.id, fingerprint);
+      payload.idempotency_key = idempotencyKey;
 
       const { data, error: rpcError } = await supabase.rpc('confirm_order', {
         payload,
@@ -257,32 +285,14 @@ export default function NewOrderPage() {
           signOut(t('auth.sessionExpired'));
           return;
         }
+        if (rpcError.message.includes('Idempotency key reused')) {
+          invalidateOrderIdempotencyKey(profile.id, idempotencyKey);
+        }
         setError(rpcError.message);
         return;
       }
       const orderId = data as string;
-      if (isPreorderToggle && orderId) {
-        await supabase
-          .from('orders')
-          .update({
-            is_preorder: true,
-            preorder_status: 'pending',
-            pickup_date: pickedDate ?? todayYYYYMMDD,
-          })
-          .eq('id', orderId);
-      }
-      if (isDebtToggle && orderId) {
-        await supabase
-          .from('orders')
-          .update({
-            is_debt: true,
-            payment_type: 'debt',
-            debt_status: 'active',
-            debt_customer_phone: phone,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', orderId);
-      }
+      markOrderIdempotencyConfirmed(profile.id, idempotencyKey, orderId);
       setCart([]);
       setPaymentType('');
       setComment('');
