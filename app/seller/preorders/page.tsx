@@ -10,6 +10,7 @@ import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber } from '@/lib/orderNumber';
+import { runExclusive } from '@/lib/exclusiveAsync';
 import type { Order, PreorderStatus } from '@/lib/types';
 import type { City } from '@/lib/types';
 
@@ -106,6 +107,7 @@ export default function SellerPreordersPage() {
 
   async function handleFulfill(orderId: string) {
     if (!profile?.id) return;
+    await runExclusive(`fulfill:${orderId}`, async () => {
     if (!(await ensureActive())) return;
     setFulfillingId(orderId);
     setError(null);
@@ -124,6 +126,7 @@ export default function SellerPreordersPage() {
     if (orderDetail?.id === orderId)
       setOrderDetail((d) => (d ? { ...d, preorder_status: 'fulfilled', fulfilled_at: now } : null));
     alert('Выдано');
+    });
   }
 
   const cityMap = new Map(cities.map((c) => [c.id, c.name]));

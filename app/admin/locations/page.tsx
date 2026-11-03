@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { runExclusive } from '@/lib/exclusiveAsync';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import { supabase } from '@/lib/supabaseClient';
@@ -246,6 +247,9 @@ export default function AdminLocationsPage() {
   }
 
   async function handleRestock() {
+    await runExclusive(
+      `restock:${restockForm.city_id}:${restockForm.product_id}:${restockForm.qty_add}`,
+      async () => {
     const product = products.find((p) => p.id === restockForm.product_id);
     const unit = product?.unit;
     const qty = Number(restockForm.qty_add);
@@ -318,10 +322,13 @@ export default function AdminLocationsPage() {
     } else if (selectedCity) {
       await loadInventory(selectedCity);
     }
+      }
+    );
   }
 
   async function handleAdjust() {
     if (!adjustRow || !selectedCity) return;
+    await runExclusive(`adjust:${adjustRow.id}:${adjustForm.new_qty}`, async () => {
     const product = products.find((p) => p.id === adjustRow.product_id);
     const unit = product?.unit;
     const newQty = Number(adjustForm.new_qty);
@@ -352,6 +359,7 @@ export default function AdminLocationsPage() {
     setAdjustForm({ new_qty: '' });
     setShowAdjust(false);
     loadInventory(selectedCity!);
+    });
   }
 
   return (

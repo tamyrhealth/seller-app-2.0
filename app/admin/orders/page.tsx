@@ -19,6 +19,7 @@ import type { Profile } from '@/lib/types';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber, parseOrderNumberQuery } from '@/lib/orderNumber';
+import { runExclusive } from '@/lib/exclusiveAsync';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -284,6 +285,7 @@ export default function AdminOrdersPage() {
   }, [selectedId, refreshKey]);
 
   async function handleCancel(orderId: string, reason?: string | null) {
+    await runExclusive(`admin-cancel:${orderId}`, async () => {
     if (!(await ensureActive())) return;
     const { error } = await supabase.rpc('admin_cancel_order', {
       p_order_id: orderId,
@@ -321,9 +323,11 @@ export default function AdminOrdersPage() {
     }
     setSelectedId(null);
     setRefreshKey((k) => k + 1);
+    });
   }
 
   async function handleMarkDebtPaid(orderId: string) {
+    await runExclusive(`debt-pay:${orderId}`, async () => {
     if (!(await ensureActive())) return;
     setPayingDebtId(orderId);
     const method = (debtPaymentMethod?.trim() === 'kaspi' ? 'kaspi' : 'cash') as 'cash' | 'kaspi';
@@ -347,9 +351,11 @@ export default function AdminOrdersPage() {
       );
     }
     setRefreshKey((k) => k + 1);
+    });
   }
 
   async function handleFulfillPreorder(orderId: string) {
+    await runExclusive(`fulfill:${orderId}`, async () => {
     if (!(await ensureActive())) return;
     setFulfillingId(orderId);
     const { error } = await supabase.rpc('fulfill_preorder', { p_order_id: orderId });
@@ -366,6 +372,7 @@ export default function AdminOrdersPage() {
       setOrderDetail((d) => (d ? { ...d, preorder_status: 'fulfilled', fulfilled_at: now } : null));
     setRefreshKey((k) => k + 1);
     alert('Выдано');
+    });
   }
 
   const cityMap = new Map(cities.map((c) => [c.id, c.name]));

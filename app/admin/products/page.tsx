@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { runExclusive } from '@/lib/exclusiveAsync';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import { supabase } from '@/lib/supabaseClient';
@@ -67,6 +68,7 @@ export default function AdminProductsPage() {
   }
 
   async function handleSave() {
+    await runExclusive(`product-save:${editingId ?? 'new'}:${form.name}:${form.price_retail}`, async () => {
     const price = parseFloat(form.price_retail);
     if (!form.name || isNaN(price) || price < 0) {
       alert('Заполните название и цену');
@@ -98,6 +100,7 @@ export default function AdminProductsPage() {
       else resetForm();
     }
     load();
+    });
   }
 
   async function handleDelete(p: Product) {

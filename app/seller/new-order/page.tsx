@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Protected from '@/components/Protected';
@@ -12,9 +12,9 @@ import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import {
   buildClientOrderFingerprint,
-  getOrCreateOrderIdempotencyKey,
   invalidateOrderIdempotencyKey,
-  markOrderIdempotencyConfirmed,
+  releaseConfirmedOrderAttempt,
+  runConfirmOrderOnce,
 } from '@/lib/orderIdempotency';
 import type { Product, PaymentType } from '@/lib/types';
 
@@ -68,6 +68,7 @@ export default function NewOrderPage() {
   const [debtNote, setDebtNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const submitGate = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const cityId = profile?.city_id ?? null;
@@ -195,9 +196,22 @@ export default function NewOrderPage() {
     (orderType === 'ordinary' || orderType === 'preorder' ? !!paymentType : true) &&
     (orderType !== 'debt' || debtCustomerPhone.trim() !== '');
 
+  useEffect(() => {
+    if (cart.length === 0 && profile?.id) {
+      releaseConfirmedOrderAttempt(profile.id);
+    }
+  }, [cart.length, profile?.id]);
+
   async function handleConfirm() {
+    if (submitGate.current || submitting) return;
     if (!canSubmit || !profile?.id || !cityId) return;
-    if (!(await ensureActive())) return;
+    submitGate.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+    if (!(await ensureActive())) {
+      return;
+    }
     const isDebtToggle = orderType === 'debt';
     const phone = (debtCustomerPhone ?? '').toString().trim();
     if (isDebtToggle && !phone) {
@@ -222,10 +236,7 @@ export default function NewOrderPage() {
         return;
       }
     }
-    setSubmitting(true);
-    setError(null);
     const todayYYYYMMDD = new Date().toISOString().slice(0, 10);
-    try {
       const items = cart.map((item) => ({
         product_id: item.product_id,
         qty: item.qty ?? 0,
@@ -272,26 +283,26 @@ export default function NewOrderPage() {
         debtNote: debtNoteVal,
         items,
       });
-      const idempotencyKey = getOrCreateOrderIdempotencyKey(profile.id, fingerprint);
-      payload.idempotency_key = idempotencyKey;
-
-      const { data, error: rpcError } = await supabase.rpc('confirm_order', {
-        payload,
+      const orderId = await runConfirmOrderOnce(profile.id, fingerprint, async (idempotencyKey) => {
+        payload.idempotency_key = idempotencyKey;
+        const { data, error: rpcError } = await supabase.rpc('confirm_order', {
+          payload,
+        });
+        if (rpcError) {
+          if (isSessionError(rpcError)) {
+            signOut(t('auth.sessionExpired'));
+            throw rpcError;
+          }
+          if (rpcError.message.includes('Idempotency key reused')) {
+            invalidateOrderIdempotencyKey(profile.id, idempotencyKey);
+          }
+          throw rpcError;
+        }
+        if (!data) {
+          throw new Error(t('common.error'));
+        }
+        return data as string;
       });
-
-      if (rpcError) {
-        if (isSessionError(rpcError)) {
-          signOut(t('auth.sessionExpired'));
-          return;
-        }
-        if (rpcError.message.includes('Idempotency key reused')) {
-          invalidateOrderIdempotencyKey(profile.id, idempotencyKey);
-        }
-        setError(rpcError.message);
-        return;
-      }
-      const orderId = data as string;
-      markOrderIdempotencyConfirmed(profile.id, idempotencyKey, orderId);
       setCart([]);
       setPaymentType('');
       setComment('');
@@ -304,8 +315,12 @@ export default function NewOrderPage() {
       router.refresh();
       router.push(isDebtToggle ? `/seller/debts` : `/seller/orders?id=${orderId}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.error'));
+      const message = err instanceof Error ? err.message : t('common.error');
+      if (!isSessionError(err as { message?: string })) {
+        setError(message);
+      }
     } finally {
+      submitGate.current = false;
       setSubmitting(false);
     }
   }

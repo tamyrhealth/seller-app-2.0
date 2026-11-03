@@ -11,6 +11,7 @@ import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber } from '@/lib/orderNumber';
+import { runExclusive } from '@/lib/exclusiveAsync';
 
 type OrderItemRow = {
   id?: string;
@@ -221,24 +222,26 @@ export default function SellerOrdersClient() {
   }
 
   async function handleCancel(orderId: string) {
-    if (!(await ensureActive())) return;
-    setCancelLoading(true);
-    setError(null);
-    try {
-      const { error: e } = await supabase.rpc('cancel_order', { p_order_id: orderId });
-      if (e) {
-        if (isSessionError(e)) {
-          signOut(t('auth.sessionExpired'));
+    await runExclusive(`cancel:${orderId}`, async () => {
+      if (!(await ensureActive())) return;
+      setCancelLoading(true);
+      setError(null);
+      try {
+        const { error: e } = await supabase.rpc('cancel_order', { p_order_id: orderId });
+        if (e) {
+          if (isSessionError(e)) {
+            signOut(t('auth.sessionExpired'));
+            return;
+          }
+          setError(e.message);
           return;
         }
-        setError(e.message);
-        return;
+        await loadOrders();
+        await loadOrderDetail(orderId);
+      } finally {
+        setCancelLoading(false);
       }
-      await loadOrders();
-      await loadOrderDetail(orderId);
-    } finally {
-      setCancelLoading(false);
-    }
+    });
   }
 
   const items = orderDetail?.order_items ?? [];

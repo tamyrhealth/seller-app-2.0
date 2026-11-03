@@ -10,6 +10,7 @@ import { isSessionError } from '@/lib/supabaseHelpers';
 import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber } from '@/lib/orderNumber';
+import { runExclusive } from '@/lib/exclusiveAsync';
 import type { Order } from '@/lib/types';
 import type { City } from '@/lib/types';
 
@@ -117,6 +118,7 @@ export default function SellerDebtsPage() {
 
   async function handleMarkPaid(orderId: string) {
     if (!profile?.id) return;
+    await runExclusive(`debt-pay:${orderId}`, async () => {
     if (!(await ensureActive())) return;
     setPayingId(orderId);
     setError(null);
@@ -274,6 +276,7 @@ export default function SellerDebtsPage() {
       );
     }
     setPaymentMethod('');
+    });
   }
 
   const cityMap = new Map(cities.map((c) => [c.id, c.name]));

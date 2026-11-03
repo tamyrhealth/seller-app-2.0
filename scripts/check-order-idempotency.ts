@@ -1,9 +1,12 @@
+import { runExclusive } from '../lib/exclusiveAsync';
 import {
   buildClientOrderFingerprint,
   getOrCreateOrderIdempotencyKey,
   getTabOrderIdempotencySnapshot,
   invalidateOrderIdempotencyKey,
   markOrderIdempotencyConfirmed,
+  releaseConfirmedOrderAttempt,
+  runConfirmOrderOnce,
 } from '../lib/orderIdempotency';
 
 function fail(msg: string): never {
@@ -109,16 +112,20 @@ if (k1 !== k1b) fail('pending retry in same tab must reuse key');
 
 installTab(tabB);
 const k2 = getOrCreateOrderIdempotencyKey('user-a', fp1);
-if (k2 === k1) fail('second tab must get its own key for the same cart');
+if (k2 !== k1) fail('second tab must reuse shared pending key for the same in-flight cart');
 
-markOrderIdempotencyConfirmed('user-a', k2, 'order-b');
+markOrderIdempotencyConfirmed('user-a', k2, 'order-shared');
 installTab(tabA);
 const k1c = getOrCreateOrderIdempotencyKey('user-a', fp1);
-if (k1c !== k1) fail('success in another tab must not rotate this tab pending key');
+if (k1c !== k1) fail('pending tab must keep key after other tab confirms the same operation');
 
-markOrderIdempotencyConfirmed('user-a', k1, 'order-a');
+markOrderIdempotencyConfirmed('user-a', k1, 'order-shared');
+const kConfirmed = getOrCreateOrderIdempotencyKey('user-a', fp1);
+if (kConfirmed !== k1) fail('confirmed success must not rotate key until release');
+
+releaseConfirmedOrderAttempt('user-a');
 const k3 = getOrCreateOrderIdempotencyKey('user-a', fp1);
-if (k3 === k1) fail('new identical order after success must get a new key');
+if (k3 === k1) fail('new identical order after release must get a new key');
 
 const kUserB = getOrCreateOrderIdempotencyKey('user-b', fp1);
 if (kUserB === k3) fail('another user in same tab must not reuse previous user key');
@@ -158,4 +165,73 @@ if (fpDupLines === fpMergedLine) {
   fail('two order lines must not collapse into one fingerprint');
 }
 
-console.log('OK');
+void (async () => {
+  let executeCount = 0;
+  const slowConfirm = () =>
+    runConfirmOrderOnce('user-race', fp1, async () => {
+      executeCount += 1;
+      await new Promise((r) => setTimeout(r, 30));
+      return 'order-race';
+    });
+  const [r1, r2, r3] = await Promise.all([slowConfirm(), slowConfirm(), slowConfirm()]);
+  if (executeCount !== 1) fail(`overlapping confirm must execute once, got ${executeCount}`);
+  if (r1 !== 'order-race' || r2 !== r1 || r3 !== r1) fail('overlapping confirm must return the same order id');
+
+  const afterSuccess = await runConfirmOrderOnce('user-race', fp1, async () => {
+    executeCount += 1;
+    return 'order-should-not-create';
+  });
+  if (afterSuccess !== 'order-race') fail('retry after success without release must return existing order');
+  if (executeCount !== 1) fail('retry after success must not call confirm_order again');
+
+  releaseConfirmedOrderAttempt('user-race');
+  const fresh = await runConfirmOrderOnce('user-race', fp1, async () => 'order-fresh');
+  if (fresh !== 'order-fresh') fail('after release a new confirm must be a new operation');
+
+  const timeoutUser = 'user-timeout';
+  const timeoutKeyBefore = getOrCreateOrderIdempotencyKey(timeoutUser, fp1);
+  try {
+    await runConfirmOrderOnce(timeoutUser, fp1, async () => {
+      throw new Error('network timeout');
+    });
+    fail('timeout execute must throw');
+  } catch (err) {
+    if (!(err instanceof Error) || err.message !== 'network timeout') fail('unexpected timeout error');
+  }
+  const timeoutSnap = getTabOrderIdempotencySnapshot();
+  if (!timeoutSnap || timeoutSnap.key !== timeoutKeyBefore || timeoutSnap.status !== 'pending') {
+    fail('timeout must keep pending idempotency key');
+  }
+  const timeoutRetryKey = getOrCreateOrderIdempotencyKey(timeoutUser, fp1);
+  if (timeoutRetryKey !== timeoutKeyBefore) fail('retry after timeout must reuse the same key');
+
+  const persisted = local.getItem('seller-app:order-idempotency:v3');
+  const tabId = tabA.getItem('seller-app:order-idempotency-tab');
+  const reloadedSession = makeStorage();
+  if (tabId) reloadedSession.setItem('seller-app:order-idempotency-tab', tabId);
+  installTab(reloadedSession);
+  if (persisted) local.setItem('seller-app:order-idempotency:v3', persisted);
+  const afterReload = getOrCreateOrderIdempotencyKey(timeoutUser, fp1);
+  if (afterReload !== timeoutKeyBefore) fail('reload must restore pending idempotency key');
+
+  const timeoutOrder = await runConfirmOrderOnce(timeoutUser, fp1, async (key) => {
+    if (key !== timeoutKeyBefore) fail('reload retry must send the original key');
+    return 'order-after-timeout';
+  });
+  if (timeoutOrder !== 'order-after-timeout') fail('retry after timeout must confirm once');
+  releaseConfirmedOrderAttempt(timeoutUser);
+  const secondIntent = getOrCreateOrderIdempotencyKey(timeoutUser, fp1);
+  if (secondIntent === timeoutKeyBefore) fail('new intentional order after confirmed completion must get a new key');
+
+  let exclusiveCount = 0;
+  const exclusiveJob = () =>
+    runExclusive('restock:demo', async () => {
+      exclusiveCount += 1;
+      await new Promise((r) => setTimeout(r, 20));
+      return 'ok';
+    });
+  await Promise.all([exclusiveJob(), exclusiveJob(), exclusiveJob()]);
+  if (exclusiveCount !== 1) fail(`exclusive restock must run once, got ${exclusiveCount}`);
+
+  console.log('OK');
+})().catch((err) => fail(err instanceof Error ? err.message : String(err)));

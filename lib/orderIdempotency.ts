@@ -1,6 +1,6 @@
-const STORE_KEY = 'seller-app:order-idempotency:v2';
+const STORE_KEY = 'seller-app:order-idempotency:v3';
 const TAB_KEY = 'seller-app:order-idempotency-tab';
-const LEGACY_KEY = 'seller-app:order-idempotency';
+const LEGACY_KEYS = ['seller-app:order-idempotency', 'seller-app:order-idempotency:v2'];
 
 export type OrderIdempotencyItem = {
   product_id: string;
@@ -34,8 +34,11 @@ type Op = {
 };
 
 type Store = {
-  ops: Record<string, Op>;
+  tabs: Record<string, Op>;
+  sharedPending: Op | null;
 };
+
+const inflightByUser = new Map<string, Promise<string>>();
 
 function normText(value: string | null | undefined): string {
   return String(value ?? '').trim();
@@ -91,22 +94,31 @@ function getTabId(): string {
   return id;
 }
 
+function emptyStore(): Store {
+  return { tabs: {}, sharedPending: null };
+}
+
 function readStore(): Store {
   const local = storageOf('localStorage');
-  try {
-    local?.removeItem(LEGACY_KEY);
-  } catch {
-    /* ignore quota / private mode */
+  for (const legacy of LEGACY_KEYS) {
+    try {
+      local?.removeItem(legacy);
+    } catch {
+      /* ignore */
+    }
   }
-  if (!local) return { ops: {} };
+  if (!local) return emptyStore();
   try {
     const raw = local.getItem(STORE_KEY);
-    if (!raw) return { ops: {} };
+    if (!raw) return emptyStore();
     const parsed = JSON.parse(raw) as Store;
-    if (!parsed?.ops || typeof parsed.ops !== 'object') return { ops: {} };
-    return parsed;
+    if (!parsed || typeof parsed !== 'object') return emptyStore();
+    return {
+      tabs: parsed.tabs && typeof parsed.tabs === 'object' ? parsed.tabs : {},
+      sharedPending: parsed.sharedPending ?? null,
+    };
   } catch {
-    return { ops: {} };
+    return emptyStore();
   }
 }
 
@@ -119,22 +131,42 @@ function writeStore(store: Store) {
 function writeTabOp(op: Op) {
   const tabId = getTabId();
   const store = readStore();
-  store.ops[tabId] = op;
+  store.tabs[tabId] = op;
+  if (op.status === 'pending') {
+    store.sharedPending = op;
+  } else if (store.sharedPending?.key === op.key) {
+    store.sharedPending = op;
+  }
   writeStore(store);
 }
 
 function readTabOp(): Op | null {
   const store = readStore();
-  const op = store.ops[getTabId()];
+  const op = store.tabs[getTabId()];
   if (!op?.key || !op.fingerprint || !op.userId) return null;
   return op;
 }
 
 export function getOrCreateOrderIdempotencyKey(userId: string, fingerprint: string): string {
-  const op = readTabOp();
-  if (op && op.userId === userId && op.fingerprint === fingerprint && op.status === 'pending') {
-    return op.key;
+  const tabOp = readTabOp();
+  if (tabOp && tabOp.userId === userId) {
+    if (tabOp.status === 'pending') return tabOp.key;
+    if (tabOp.status === 'confirmed' && tabOp.fingerprint === fingerprint && tabOp.orderId) {
+      return tabOp.key;
+    }
   }
+
+  const shared = readStore().sharedPending;
+  if (
+    shared?.userId === userId &&
+    shared.status === 'pending' &&
+    shared.fingerprint === fingerprint &&
+    shared.key
+  ) {
+    writeTabOp(shared);
+    return shared.key;
+  }
+
   const key = crypto.randomUUID();
   writeTabOp({ key, fingerprint, userId, status: 'pending' });
   return key;
@@ -142,19 +174,82 @@ export function getOrCreateOrderIdempotencyKey(userId: string, fingerprint: stri
 
 export function markOrderIdempotencyConfirmed(userId: string, key: string, orderId: string) {
   const op = readTabOp();
-  if (!op || op.userId !== userId || op.key !== key) return;
+  if (!op || op.userId !== userId || op.key !== key) {
+    writeTabOp({
+      key,
+      fingerprint: op?.fingerprint ?? '',
+      userId,
+      status: 'confirmed',
+      orderId,
+    });
+    return;
+  }
   writeTabOp({ ...op, status: 'confirmed', orderId });
 }
 
 export function invalidateOrderIdempotencyKey(userId: string, key: string) {
   const tabId = getTabId();
   const store = readStore();
-  const op = store.ops[tabId];
-  if (!op || op.userId !== userId || op.key !== key) return;
-  delete store.ops[tabId];
+  const op = store.tabs[tabId];
+  if (op && op.userId === userId && op.key === key) {
+    delete store.tabs[tabId];
+  }
+  if (store.sharedPending?.userId === userId && store.sharedPending.key === key) {
+    store.sharedPending = null;
+  }
+  writeStore(store);
+}
+
+export function releaseConfirmedOrderAttempt(userId: string) {
+  const tabId = getTabId();
+  const store = readStore();
+  const op = store.tabs[tabId];
+  if (op && op.userId === userId && op.status === 'confirmed') {
+    delete store.tabs[tabId];
+  }
+  if (store.sharedPending?.userId === userId && store.sharedPending.status === 'confirmed') {
+    store.sharedPending = null;
+  }
   writeStore(store);
 }
 
 export function getTabOrderIdempotencySnapshot(): Op | null {
   return readTabOp();
+}
+
+/**
+ * One user-facing confirm = one promise and one key.
+ * Overlapping clicks join the in-flight call.
+ * After success, a same-fingerprint retry returns the existing order id
+ * until releaseConfirmedOrderAttempt (empty cart / new attempt).
+ */
+export function runConfirmOrderOnce(
+  userId: string,
+  fingerprint: string,
+  execute: (idempotencyKey: string) => Promise<string>
+): Promise<string> {
+  const existing = inflightByUser.get(userId);
+  if (existing) return existing;
+
+  const started = (async () => {
+    const op = readTabOp();
+    if (op?.userId === userId && op.status === 'confirmed' && op.orderId && op.fingerprint === fingerprint) {
+      return op.orderId;
+    }
+    if (op?.userId === userId && op.status === 'confirmed' && op.fingerprint !== fingerprint) {
+      releaseConfirmedOrderAttempt(userId);
+    }
+    const key = getOrCreateOrderIdempotencyKey(userId, fingerprint);
+    const orderId = await execute(key);
+    if (!orderId) {
+      throw new Error('confirm_order returned empty id');
+    }
+    markOrderIdempotencyConfirmed(userId, key, orderId);
+    return orderId;
+  })().finally(() => {
+    if (inflightByUser.get(userId) === started) inflightByUser.delete(userId);
+  });
+
+  inflightByUser.set(userId, started);
+  return started;
 }
