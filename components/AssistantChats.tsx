@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabaseClient';
 import { runExclusive } from '@/lib/exclusiveAsync';
 import { displayChatNumber } from '@/lib/chatNumber';
 import AssistantMarkdown from '@/components/AssistantMarkdown';
+import AssistantOrderDraftCard from '@/components/AssistantOrderDraftCard';
+import type { AssistantDraftRow } from '@/lib/assistant/orderDraftTypes';
 
 type ChatRow = {
   id: string;
@@ -22,6 +24,7 @@ type MsgRow = {
   role: string;
   content: string;
   created_at: string;
+  metadata?: { kind?: string; draft_id?: string };
 };
 
 function sqlMissing(message: string) {
@@ -53,6 +56,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [waitingAi, setWaitingAi] = useState(false);
   const [retry, setRetry] = useState<{ content: string; clientMessageId: string } | null>(null);
+  const [drafts, setDrafts] = useState<AssistantDraftRow[]>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const readOnly = audit;
   const sendingRef = useRef(false);
@@ -99,17 +103,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   useEffect(() => {
     if (!openId) {
       setMessages([]);
+      setDrafts([]);
       return;
     }
-    supabase
-      .from('assistant_messages')
-      .select('id, role, content, created_at')
-      .eq('chat_id', openId)
-      .order('created_at', { ascending: true })
-      .then(({ data, error: err }) => {
-        if (err) setError(err.message);
-        else setMessages((data || []) as MsgRow[]);
-      });
+    void reloadMessages(openId);
     const chat = chats.find((c) => c.id === openId);
     setRename(chat?.title || '');
   }, [openId, chats]);
@@ -157,14 +154,31 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     else await loadChats();
   }
 
+  async function reloadDrafts(chatId: string) {
+    const { data, error: err } = await supabase
+      .from('assistant_order_drafts')
+      .select(
+        'id, chat_id, owner_id, created_by, user_message_id, assistant_message_id, status, can_confirm, warnings, errors, preview, order_id, order_number, confirmed_by, confirmed_at'
+      )
+      .eq('chat_id', chatId)
+      .order('created_at', { ascending: true });
+    if (err) {
+      if (!/assistant_order_drafts|schema cache/i.test(err.message)) setError(err.message);
+      else setDrafts([]);
+      return;
+    }
+    setDrafts((data || []) as AssistantDraftRow[]);
+  }
+
   async function reloadMessages(chatId: string) {
     const { data, error: err } = await supabase
       .from('assistant_messages')
-      .select('id, role, content, created_at')
+      .select('id, role, content, created_at, metadata')
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
     if (err) setError(err.message);
     else setMessages((data || []) as MsgRow[]);
+    await reloadDrafts(chatId);
   }
 
   async function requestAssistant(chatId: string, content: string, clientMessageId: string) {
@@ -198,6 +212,68 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
     setError('');
     setRetry(null);
+  }
+
+  async function assistantOrderAction(path: 'confirm' | 'cancel', draftId: string) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) {
+      setError('Сессия истекла. Войдите снова.');
+      return 'error' as const;
+    }
+    const res = await fetch(`/api/assistant/orders/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ draftId }),
+    });
+    const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; pending?: boolean };
+    if (openId) {
+      await reloadMessages(openId);
+      await loadChats();
+    }
+    if (res.status === 202 || payload.pending) {
+      setError(payload.message || 'Заказ ещё обрабатывается. Повторите подтверждение.');
+      return 'pending' as const;
+    }
+    if (!res.ok || payload.ok === false) {
+      setError(payload.message || 'Не удалось выполнить действие с заказом.');
+      return 'error' as const;
+    }
+    setError('');
+    return 'ok' as const;
+  }
+
+  async function confirmDraft(draftId: string) {
+    if (readOnly || busy) return;
+    setBusy(true);
+    try {
+      await runExclusive(`assistant-order-confirm:${draftId}`, async () => {
+        const first = await assistantOrderAction('confirm', draftId);
+        if (first !== 'pending') return;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await assistantOrderAction('confirm', draftId);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelDraft(draftId: string, fix = false) {
+    if (readOnly || busy) return;
+    setBusy(true);
+    try {
+      await runExclusive(`assistant-order-cancel:${draftId}`, () => assistantOrderAction('cancel', draftId));
+      if (fix) {
+        setDraft('');
+        setError('Отправьте исправленную накладную новым сообщением.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function send(existing?: { content: string; clientMessageId: string }) {
@@ -287,6 +363,14 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
               ) : (
                 messages.map((m) => {
                   const mine = m.role === 'user';
+                  const card =
+                    !mine
+                      ? drafts.find(
+                          (row) =>
+                            row.assistant_message_id === m.id ||
+                            row.id === m.metadata?.draft_id
+                        )
+                      : undefined;
                   return (
                     <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                       <div
@@ -299,6 +383,16 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                         ) : (
                           <AssistantMarkdown content={m.content} />
                         )}
+                        {card ? (
+                          <AssistantOrderDraftCard
+                            draft={card}
+                            readOnly={readOnly}
+                            busy={busy}
+                            onConfirm={(id) => void confirmDraft(id)}
+                            onFix={(id) => void cancelDraft(id, true)}
+                            onCancel={(id) => void cancelDraft(id)}
+                          />
+                        ) : null}
                         <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>
                           {formatMsgTime(m.created_at)}
                         </p>

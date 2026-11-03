@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isAssistantRole } from '@/lib/roles';
 import { ASSISTANT_USER_MESSAGE_MAX } from '@/lib/assistant/limits';
-import { generateAssistantReply } from '@/lib/assistant/runModel';
+import { generateAssistantTurn } from '@/lib/assistant/handleTurn';
 import { createServiceClient, createUserClient, readBearerToken } from '@/lib/assistant/supabaseServer';
 
 export const runtime = 'nodejs';
@@ -160,8 +160,34 @@ export async function POST(req: Request) {
     const last = rows[rows.length - 1];
     const withoutCurrent =
       last?.role === 'user' && last.content === storedContent ? rows.slice(0, -1) : rows;
-    const text = await generateAssistantReply(userDb, withoutCurrent, storedContent);
-    const { error: completeErr } = await service.rpc('complete_assistant_generation', {
+    const turn = await generateAssistantTurn(userDb, withoutCurrent, storedContent);
+    let text = turn.content;
+    if (turn.draft) {
+      const { error: saveErr } = await service.rpc('save_assistant_order_draft', {
+        p_id: turn.draft.id,
+        p_chat_id: chatId,
+        p_owner_id: user.id,
+        p_created_by: user.id,
+        p_user_message_id: userMessageId || null,
+        p_status: turn.draft.status,
+        p_can_confirm: turn.draft.can_confirm,
+        p_warnings: turn.draft.warnings,
+        p_errors: turn.draft.errors,
+        p_resolved: turn.draft.resolved,
+        p_preview: turn.draft.preview,
+        p_customer_phone: turn.draft.customer_phone,
+        p_idempotency_key: turn.draft.idempotency_key,
+      });
+      if (saveErr) {
+        if (/assistant_order_drafts|save_assistant_order_draft|schema cache/i.test(saveErr.message)) {
+          text += '\n\nЧерновик заказа не сохранён: сначала примените SQL этапа 5.2.2.';
+          turn.draft = null;
+        } else {
+          throw saveErr;
+        }
+      }
+    }
+    const { data: assistantMessageId, error: completeErr } = await service.rpc('complete_assistant_generation', {
       p_request_id: clientMessageId,
       p_lease_id: leaseId,
       p_content: text,
@@ -177,7 +203,24 @@ export async function POST(req: Request) {
       }
       return jsonError(500, 'save_reply_failed', 'Ответ модели не сохранён. Повторите запрос.', true);
     }
-    return NextResponse.json({ ok: true, reused: false });
+    if (turn.draft && assistantMessageId) {
+      await service.rpc('attach_assistant_order_draft_message', {
+        p_id: turn.draft.id,
+        p_assistant_message_id: assistantMessageId,
+      });
+      await service
+        .from('assistant_messages')
+        .update({
+          metadata: {
+            source: 'openai',
+            request_id: clientMessageId,
+            kind: 'order_draft',
+            draft_id: turn.draft.id,
+          },
+        })
+        .eq('id', assistantMessageId);
+    }
+    return NextResponse.json({ ok: true, reused: false, draftId: turn.draft?.id || null });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'openai_error';
     await service.rpc('fail_assistant_generation', {

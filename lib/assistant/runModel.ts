@@ -11,12 +11,12 @@ import {
   ASSISTANT_TOOL_ROUNDS,
 } from '@/lib/assistant/limits';
 import { ASSISTANT_INSTRUCTIONS } from '@/lib/assistant/prompt';
-import { capText } from '@/lib/assistant/sanitize';
+import { capText, stripIdentifiers } from '@/lib/assistant/sanitize';
 import { ASSISTANT_TOOLS, executeAssistantTool } from '@/lib/assistant/tools';
 
 type HistoryRow = { role: string; content: string };
 
-function openaiClient(): OpenAI {
+export function openaiClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('missing_openai_key');
   return new OpenAI({ apiKey, timeout: ASSISTANT_OPENAI_TIMEOUT_MS, maxRetries: 0 });
@@ -33,9 +33,13 @@ export function toModelInput(history: HistoryRow[], userText: string): ResponseI
     .map((row) => ({
       type: 'message',
       role: row.role === 'assistant' ? 'assistant' : 'user',
-      content: capText(row.content || '', ASSISTANT_HISTORY_CHAR_EACH),
+      content: capText(stripIdentifiers(row.content || ''), ASSISTANT_HISTORY_CHAR_EACH),
     }));
-  input.push({ type: 'message', role: 'user', content: capText(userText, ASSISTANT_HISTORY_CHAR_EACH) });
+  input.push({
+    type: 'message',
+    role: 'user',
+    content: capText(stripIdentifiers(userText), ASSISTANT_HISTORY_CHAR_EACH),
+  });
   return input;
 }
 

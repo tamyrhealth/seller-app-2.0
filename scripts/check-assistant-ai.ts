@@ -26,6 +26,7 @@ const verify = read('supabase/prod/post_apply_verify_block521.sql');
 const route = read('app/api/assistant/chat/route.ts');
 const ui = read('components/AssistantChats.tsx');
 const tools = read('lib/assistant/tools.ts');
+const runModel = read('lib/assistant/runModel.ts');
 const pkg = read('package.json');
 
 if (!/^BEGIN;/m.test(sql) || !/^COMMIT;/m.test(sql)) fail('5.2.1 migration must be transactional');
@@ -76,6 +77,10 @@ if (auditWriteTools(tools)) fail('assistant tools must stay read-only');
 if (/\bcost_price\b/.test(tools)) fail('tools must not read cost_price');
 if (/debt_customer_phone|customer_phone/.test(tools)) fail('tools must not select customer phones');
 if (/\.rpc\(/i.test(tools)) fail('tools must not call RPCs');
+if (!runModel.includes('stripIdentifiers')) fail('OpenAI history must mask phones and UUIDs');
+if (/from\('(?:orders|inventory)'\)\.(insert|update|delete)/i.test(read('app/api/assistant/orders/confirm/route.ts'))) {
+  fail('confirm route must not write orders/inventory directly');
+}
 
 if (!ASSISTANT_TOOLS.every((t) => t.type === 'function')) fail('custom function tools only');
 if (ASSISTANT_TOOLS.some((t) => /web_search|computer|shell|mcp/i.test(t.name))) fail('no open-world tools');
