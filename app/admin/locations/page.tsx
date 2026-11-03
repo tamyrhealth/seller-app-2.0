@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { runExclusive } from '@/lib/exclusiveAsync';
+import {
+  inventoryAdjustFingerprint,
+  inventoryRestockFingerprint,
+  runInventoryOperationOnce,
+} from '@/lib/inventoryOperation';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import { supabase } from '@/lib/supabaseClient';
@@ -36,6 +40,19 @@ export default function AdminLocationsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [showHiddenCities, setShowHiddenCities] = useState(false);
   const [cityActionError, setCityActionError] = useState<string | null>(null);
+  const [stockBusy, setStockBusy] = useState(false);
+  const [movements, setMovements] = useState<
+    Array<{
+      id: string;
+      created_at: string;
+      type: string;
+      qty_delta: number;
+      city_id: string;
+      product_id: string;
+      created_by: string | null;
+    }>
+  >([]);
+  const [profilesById, setProfilesById] = useState<Map<string, string>>(new Map());
 
   const isCityActive = (c: City) => c.is_active !== false;
   const activeCities = useMemo(() => cities.filter(isCityActive), [cities]);
@@ -78,6 +95,16 @@ export default function AdminLocationsPage() {
   useEffect(() => {
     loadCities();
     supabase.from('products').select('*').eq('is_active', true).then(({ data }) => setProducts(data || []));
+    supabase
+      .from('profiles')
+      .select('id, display_name')
+      .then(({ data }) => {
+        const map = new Map<string, string>();
+        for (const p of data || []) {
+          map.set(p.id, p.display_name || p.id.slice(0, 8));
+        }
+        setProfilesById(map);
+      });
   }, []);
 
   useEffect(() => {
@@ -90,6 +117,7 @@ export default function AdminLocationsPage() {
     } else {
       loadInventory(selectedCity);
     }
+    loadMovements(selectedCity);
   }, [selectedCity, cities]);
 
   async function loadCities() {
@@ -152,6 +180,21 @@ export default function AdminLocationsPage() {
         };
       })
     );
+  }
+
+  async function loadMovements(cityId: string | null) {
+    if (!cityId) {
+      setMovements([]);
+      return;
+    }
+    let q = supabase
+      .from('inventory_movements')
+      .select('id, created_at, type, qty_delta, city_id, product_id, created_by')
+      .order('created_at', { ascending: false })
+      .limit(30);
+    if (cityId !== 'ALL') q = q.eq('city_id', cityId);
+    const { data } = await q;
+    setMovements((data || []) as typeof movements);
   }
 
   async function saveCity() {
@@ -247,9 +290,7 @@ export default function AdminLocationsPage() {
   }
 
   async function handleRestock() {
-    await runExclusive(
-      `restock:${restockForm.city_id}:${restockForm.product_id}:${restockForm.qty_add}`,
-      async () => {
+    if (stockBusy) return;
     const product = products.find((p) => p.id === restockForm.product_id);
     const unit = product?.unit;
     const qty = Number(restockForm.qty_add);
@@ -262,73 +303,34 @@ export default function AdminLocationsPage() {
       alert('Приход возможен только в активный город');
       return;
     }
-
-    const { data, error: userError } = await supabase.auth.getUser();
-    if (userError) {
-      console.error('handleRestock: getUser error', userError);
-      alert('Не удалось добавить приход, попробуйте снова');
-      return;
-    }
-    const uid = data.user?.id;
-
-    const { data: existing } = await supabase
-      .from('inventory')
-      .select('id, qty_on_hand')
-      .eq('city_id', restockForm.city_id)
-      .eq('product_id', restockForm.product_id)
-      .single();
-
-    if (existing) {
-      const { error } = await supabase
-        .from('inventory')
-        .update({ qty_on_hand: existing.qty_on_hand + qty })
-        .eq('id', existing.id);
-      if (error) {
-        console.error('handleRestock: update inventory error', error);
-        alert('Не удалось добавить приход, попробуйте снова');
-        return;
-      }
-    } else {
-      const { error } = await supabase.from('inventory').insert({
-        city_id: restockForm.city_id,
-        product_id: restockForm.product_id,
-        qty_on_hand: qty,
+    const cityId = restockForm.city_id;
+    const productId = restockForm.product_id;
+    const fingerprint = inventoryRestockFingerprint(cityId, productId, qty);
+    setStockBusy(true);
+    try {
+      await runInventoryOperationOnce('restock', fingerprint, async (operationId) => {
+        const { error } = await supabase.rpc('apply_inventory_restock', {
+          p_operation_id: operationId,
+          p_city_id: cityId,
+          p_product_id: productId,
+          p_qty: qty,
+        });
+        if (error) throw new Error(error.message);
       });
-      if (error) {
-        console.error('handleRestock: insert inventory error', error);
-        alert('Не удалось добавить приход, попробуйте снова');
-        return;
-      }
+      setRestockForm({ city_id: '', product_id: '', qty_add: '' });
+      setShowRestock(false);
+      if (selectedCity === 'ALL') await loadInventoryAll();
+      else if (selectedCity) await loadInventory(selectedCity);
+      await loadMovements(selectedCity);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Не удалось добавить приход');
+    } finally {
+      setStockBusy(false);
     }
-
-    const { error: moveError } = await supabase.from('inventory_movements').insert({
-      city_id: restockForm.city_id,
-      product_id: restockForm.product_id,
-      type: 'restock',
-      qty_delta: qty,
-      created_by: uid,
-    });
-    if (moveError) {
-      console.error('handleRestock: insert movement error', moveError);
-      alert('Не удалось добавить приход, попробуйте снова');
-      return;
-    }
-
-    setRestockForm({ city_id: '', product_id: '', qty_add: '' });
-    setShowRestock(false);
-    // Обновляем остатки для текущего режима (город или Весь КЗ)
-    if (selectedCity === 'ALL') {
-      await loadInventoryAll();
-    } else if (selectedCity) {
-      await loadInventory(selectedCity);
-    }
-      }
-    );
   }
 
   async function handleAdjust() {
-    if (!adjustRow || !selectedCity) return;
-    await runExclusive(`adjust:${adjustRow.id}:${adjustForm.new_qty}`, async () => {
+    if (stockBusy || !adjustRow || !selectedCity || selectedCity === 'ALL') return;
     const product = products.find((p) => p.id === adjustRow.product_id);
     const unit = product?.unit;
     const newQty = Number(adjustForm.new_qty);
@@ -337,29 +339,32 @@ export default function AdminLocationsPage() {
       alert(qtyErr);
       return;
     }
-
-    const delta = newQty - adjustRow.qty_on_hand;
-    const res = await supabase.auth.getUser() as unknown as { data?: { user?: { id?: string } }; user?: { id?: string } };
-    const uid = res.data?.user?.id ?? res.user?.id;
-
-    await supabase
-      .from('inventory')
-      .update({ qty_on_hand: newQty })
-      .eq('id', adjustRow.id);
-
-    await supabase.from('inventory_movements').insert({
-      city_id: selectedCity!,
-      product_id: adjustRow.product_id,
-      type: 'adjust',
-      qty_delta: delta,
-      created_by: uid,
-    });
-
-    setAdjustRow(null);
-    setAdjustForm({ new_qty: '' });
-    setShowAdjust(false);
-    loadInventory(selectedCity!);
-    });
+    if (!activeCities.some((c) => c.id === selectedCity)) {
+      alert('Сначала восстановите город');
+      return;
+    }
+    const fingerprint = inventoryAdjustFingerprint(selectedCity, adjustRow.product_id, newQty);
+    setStockBusy(true);
+    try {
+      await runInventoryOperationOnce('adjust', fingerprint, async (operationId) => {
+        const { error } = await supabase.rpc('apply_inventory_adjust', {
+          p_operation_id: operationId,
+          p_city_id: selectedCity,
+          p_product_id: adjustRow.product_id,
+          p_new_qty: newQty,
+        });
+        if (error) throw new Error(error.message);
+      });
+      setAdjustRow(null);
+      setAdjustForm({ new_qty: '' });
+      setShowAdjust(false);
+      await loadInventory(selectedCity);
+      await loadMovements(selectedCity);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
+    } finally {
+      setStockBusy(false);
+    }
   }
 
   return (
@@ -484,9 +489,10 @@ export default function AdminLocationsPage() {
               <div className="flex gap-2">
                 <button
                   onClick={handleRestock}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                  disabled={stockBusy}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50"
                 >
-                  Добавить
+                  {stockBusy ? 'Сохранение…' : 'Добавить'}
                 </button>
                 <button
                   onClick={() => setShowRestock(false)}
@@ -646,6 +652,39 @@ export default function AdminLocationsPage() {
                     : `Итого по городу: ${formatMoney(total)} ₸`;
                 })()}
               </div>
+              <div className="mt-6">
+                <h3 className="font-bold mb-2 text-gray-900">История склада</h3>
+                {movements.length === 0 ? (
+                  <p className="text-sm text-gray-600">Записей нет</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-gray-800">
+                    {movements.map((m) => {
+                      const productName =
+                        products.find((p) => p.id === m.product_id)?.name ||
+                        inventory.find((r) => r.product_id === m.product_id)?.product_name ||
+                        m.product_id.slice(0, 8);
+                      const cityName = cities.find((c) => c.id === m.city_id)?.name || m.city_id.slice(0, 8);
+                      const who = m.created_by ? profilesById.get(m.created_by) || m.created_by.slice(0, 8) : '—';
+                      const when = new Date(m.created_at).toLocaleString('ru-KZ');
+                      const typeLabel =
+                        m.type === 'restock'
+                          ? 'приход'
+                          : m.type === 'adjust'
+                            ? 'корректировка'
+                            : m.type === 'sale'
+                              ? 'продажа'
+                              : m.type === 'cancel_sale'
+                                ? 'отмена продажи'
+                                : m.type;
+                      return (
+                        <li key={m.id}>
+                          {when} · {typeLabel} · {productName} · {cityName} · {m.qty_delta} · {who}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             </div>
           )}
 
@@ -664,9 +703,10 @@ export default function AdminLocationsPage() {
                 <div className="flex gap-2">
                   <button
                     onClick={handleAdjust}
-                    className="flex-1 py-2 bg-blue-600 text-white rounded-lg"
+                    disabled={stockBusy}
+                    className="flex-1 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50"
                   >
-                    Сохранить
+                    {stockBusy ? 'Сохранение…' : 'Сохранить'}
                   </button>
                   <button
                     onClick={() => {
