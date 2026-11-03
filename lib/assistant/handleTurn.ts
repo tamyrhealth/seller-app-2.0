@@ -3,7 +3,8 @@ import { randomUUID } from 'crypto';
 import { looksLikeInvoice, extractPhones } from '@/lib/assistant/paymentParse';
 import { parseInvoiceStructured } from '@/lib/assistant/invoiceParse';
 import { generateAssistantReply } from '@/lib/assistant/runModel';
-import { buildDraftMarkdown, resolveInvoiceDraft } from '@/lib/assistant/resolveOrder';
+import { resolveInvoiceDraft } from '@/lib/assistant/resolveOrder';
+import { buildDraftChatMessage } from '@/lib/assistant/draftSummary';
 import { ASSISTANT_REQUEST_DEADLINE_MS } from '@/lib/assistant/limits';
 import type { DraftResolved, DraftPreview, DraftIssue } from '@/lib/assistant/orderDraftTypes';
 
@@ -49,7 +50,7 @@ export async function generateAssistantTurn(
         customer_phone: resolved.resolved.is_debt ? phones[0] || null : null,
         idempotency_key: randomUUID(),
       };
-      return { content: buildDraftMarkdown(resolved), draft };
+      return { content: buildDraftChatMessage(resolved), draft };
     }
   }
   if (remaining() < 2000) throw new Error('timed out');

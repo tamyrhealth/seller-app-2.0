@@ -10,6 +10,7 @@ import {
 } from '@/lib/assistant/paymentParse';
 import { pricesEqual, qtyValidationError } from '@/lib/assistant/qty';
 import type {
+  DraftCandidate,
   DraftIssue,
   DraftItemResolved,
   DraftPreview,
@@ -28,49 +29,29 @@ function issue(code: string, message: string): DraftIssue {
   return { code, message };
 }
 
-function formatMoney(n: number) {
-  return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
-}
-
-export function buildDraftMarkdown(result: ResolveResult): string {
-  const { resolved, errors, warnings, can_confirm } = result;
-  const lines: string[] = [];
-  lines.push('Предварительный заказ (ещё не создан).');
-  if (resolved.seller_name) lines.push(`Продавец: **${resolved.seller_name}**`);
-  if (resolved.city_name) lines.push(`Город: **${resolved.city_name}**`);
-  if (resolved.items.length) {
-    lines.push('Товары:');
-    for (const item of resolved.items) {
-      const name = item.product_name || item.raw_name;
-      const gift = item.is_gift ? ' (подарок)' : '';
-      lines.push(
-        `- ${name}${gift}: ${item.qty} × ${formatMoney(item.price)} = ${formatMoney(item.line_sum)}`
-      );
-    }
-    lines.push(`Сумма: **${formatMoney(resolved.total_sum)}**`);
-  }
-  lines.push(`Оплата: ${paymentLabel(resolved.payment_type, resolved.is_debt)}`);
-  if (resolved.is_preorder) lines.push(`Предзаказ, дата выдачи: ${resolved.pickup_date || 'не указана'}`);
-  if (resolved.is_debt) lines.push('Долг: да (телефон на сервере, в модель не отправлялся).');
-  if (resolved.invoice_date) {
-    lines.push(
-      `Дата накладной: ${resolved.invoice_date}${resolved.invoice_time ? ` ${resolved.invoice_time}` : ''}`
-    );
-  }
-  if (warnings.length) {
-    lines.push('Предупреждения:');
-    for (const w of warnings) lines.push(`- ${w.message}`);
-  }
-  if (errors.length) {
-    lines.push('Нужно уточнить:');
-    for (const e of errors) lines.push(`- ${e.message}`);
-  }
-  if (can_confirm) {
-    lines.push('Если всё верно — нажмите «Подтвердить заказ». Заказ не создаётся из текста чата.');
-  } else {
-    lines.push('Подтверждение заблокировано, пока не исправлены замечания. Заказ не создан.');
-  }
-  return lines.join('\n');
+function toPreview(resolved: DraftResolved): DraftPreview {
+  const total_ready = resolved.items.length > 0 && resolved.items.every((i) => Boolean(i.product_id) && !i.unresolved);
+  return {
+    seller_name: resolved.seller_name,
+    city_name: resolved.city_name,
+    items: resolved.items.map((i) => ({
+      name: i.product_name || i.raw_name,
+      qty: i.qty,
+      price: i.price,
+      is_gift: i.is_gift,
+      line_sum: i.line_sum,
+      unresolved: i.unresolved || !i.product_id,
+      candidates: i.candidates,
+    })),
+    total_sum: total_ready ? resolved.total_sum : 0,
+    total_ready,
+    payment_label: paymentLabel(resolved.payment_type, resolved.is_debt),
+    is_debt: resolved.is_debt,
+    is_preorder: resolved.is_preorder,
+    invoice_date: resolved.invoice_date,
+    invoice_time: resolved.invoice_time,
+    pickup_date: resolved.pickup_date,
+  };
 }
 
 export async function resolveInvoiceDraft(
@@ -224,18 +205,24 @@ export async function resolveInvoiceDraft(
       );
     }
     if (qtyErr) errors.push(issue('qty_invalid', `${raw.name}: ${qtyErr}`));
-    const price = raw.is_gift ? 0 : Number(chosen?.price_retail || 0);
+    const unresolved = !chosen;
+    const price = raw.is_gift ? 0 : unresolved ? 0 : Number(chosen?.price_retail || 0);
+    const qtySafe = Number.isFinite(qty) ? qty : 0;
     items.push({
       raw_name: raw.name,
       product_id: chosen?.id || null,
       product_name: chosen?.name || null,
       unit: chosen?.unit || null,
-      qty: Number.isFinite(qty) ? qty : 0,
+      qty: qtySafe,
       price,
       is_gift: raw.is_gift === true,
       stock: null,
-      line_sum: (Number.isFinite(qty) ? qty : 0) * price,
-      candidates: matches.length > 1 ? matches.map((p) => p.name) : undefined,
+      line_sum: unresolved ? 0 : qtySafe * price,
+      unresolved,
+      candidates:
+        matches.length > 1
+          ? matches.map((p) => ({ id: p.id, name: p.name }))
+          : undefined,
     });
   }
 
@@ -311,29 +298,12 @@ export async function resolveInvoiceDraft(
     total_sum,
   };
 
-  const preview: DraftPreview = {
-    seller_name,
-    city_name,
-    items: items.map((i) => ({
-      name: i.product_name || i.raw_name,
-      qty: i.qty,
-      price: i.price,
-      is_gift: i.is_gift,
-      line_sum: i.line_sum,
-    })),
-    total_sum,
-    payment_label: paymentLabel(payment_type, is_debt),
-    is_debt,
-    is_preorder,
-    invoice_date,
-    invoice_time,
-    pickup_date,
-  };
+  const preview = toPreview(resolved);
 
   const idsReady =
     Boolean(seller_id && city_id) &&
     items.length > 0 &&
-    items.every((i) => i.product_id) &&
+    items.every((i) => i.product_id && !i.unresolved) &&
     Boolean(payment_type);
   const can_confirm = errors.length === 0 && idsReady;
 
@@ -440,4 +410,189 @@ export async function revalidateResolved(
     payload.debt_note = resolved.debt_note;
   }
   return { ok: true, errors: [], payload };
+}
+
+export type DraftEditInput = {
+  seller_id: string;
+  city_id: string;
+  payment_type: PaymentType | null;
+  is_debt: boolean;
+  is_preorder: boolean;
+  invoice_date: string | null;
+  invoice_time: string | null;
+  pickup_date: string | null;
+  items: { product_id: string; qty: number; is_gift: boolean; raw_name?: string }[];
+  note?: string | null;
+};
+
+export async function applyDraftEdit(db: SupabaseClient, input: DraftEditInput, debtPhone: string | null): Promise<ResolveResult> {
+  const errors: DraftIssue[] = [];
+  const warnings: DraftIssue[] = [];
+  const is_debt = input.is_debt === true;
+  const is_preorder = input.is_preorder === true && !is_debt;
+  if (input.is_debt && input.is_preorder) {
+    errors.push(issue('debt_preorder', 'Нельзя одновременно оформить долг и предзаказ.'));
+  }
+  let payment_type: PaymentType | null = is_debt ? 'debt' : input.payment_type;
+  if (payment_type === 'debt') {
+    payment_type = 'debt';
+  } else if (payment_type && !['cash', 'kaspi', 'card', 'transfer'].includes(payment_type)) {
+    payment_type = null;
+  }
+  if (!payment_type) {
+    errors.push(issue('payment_missing', 'Выберите способ оплаты.'));
+  }
+
+  const { data: seller, error: sellerErr } = await db
+    .from('profiles')
+    .select('id, display_name, role, is_active, city_id')
+    .eq('id', input.seller_id)
+    .maybeSingle();
+  if (sellerErr) throw new Error(sellerErr.message);
+  if (!seller || seller.role !== 'seller' || seller.is_active === false || !seller.city_id) {
+    errors.push(issue('seller_not_found', 'Продавец не найден или недоступен.'));
+  }
+  const { data: city, error: cityErr } = await db
+    .from('cities')
+    .select('id, name, is_active')
+    .eq('id', input.city_id)
+    .maybeSingle();
+  if (cityErr) throw new Error(cityErr.message);
+  if (!city || city.is_active === false) {
+    errors.push(issue('city_not_found', 'Город не найден.'));
+  }
+  if (seller?.city_id && city?.id && seller.city_id !== city.id) {
+    errors.push(issue('seller_city_mismatch', 'Город должен совпадать с городом продавца.'));
+  }
+
+  if (!input.items.length) {
+    errors.push(issue('items_missing', 'Добавьте хотя бы один товар.'));
+  }
+
+  const productIds = [...new Set(input.items.map((i) => i.product_id).filter(Boolean))];
+  let products: { id: string; name: string; unit: string | null; price_retail: number | null; is_active: boolean }[] = [];
+  if (productIds.length) {
+    const { data, error: pErr } = await db
+      .from('products')
+      .select('id, name, unit, price_retail, is_active')
+      .in('id', productIds);
+    if (pErr) throw new Error(pErr.message);
+    products = (data || []) as typeof products;
+  }
+  const byId = new Map(products.map((p) => [p.id, p]));
+
+  const items: DraftItemResolved[] = [];
+  for (const raw of input.items) {
+    const product = byId.get(raw.product_id);
+    const qty = Number(raw.qty);
+    if (!product || product.is_active === false) {
+      errors.push(issue('product_not_found', `Товар не найден.`));
+      items.push({
+        raw_name: raw.raw_name || 'товар',
+        product_id: null,
+        product_name: null,
+        unit: null,
+        qty: Number.isFinite(qty) ? qty : 0,
+        price: 0,
+        is_gift: raw.is_gift === true,
+        stock: null,
+        line_sum: 0,
+        unresolved: true,
+      });
+      continue;
+    }
+    const qtyErr = qtyValidationError(qty, product.unit as string);
+    if (qtyErr) errors.push(issue('qty_invalid', `${product.name}: ${qtyErr}`));
+    const price = raw.is_gift ? 0 : Number(product.price_retail || 0);
+    items.push({
+      raw_name: raw.raw_name || product.name,
+      product_id: product.id as string,
+      product_name: product.name,
+      unit: product.unit as string,
+      qty: Number.isFinite(qty) ? qty : 0,
+      price,
+      is_gift: raw.is_gift === true,
+      stock: null,
+      line_sum: (Number.isFinite(qty) ? qty : 0) * price,
+      unresolved: false,
+    });
+  }
+
+  if (city?.id) {
+    const resolvedIds = items.map((i) => i.product_id).filter(Boolean) as string[];
+    if (resolvedIds.length) {
+      const { data: inv, error: invErr } = await db
+        .from('inventory')
+        .select('product_id, qty_on_hand')
+        .eq('city_id', city.id)
+        .in('product_id', resolvedIds);
+      if (invErr) throw new Error(invErr.message);
+      const stockMap = new Map((inv || []).map((r) => [r.product_id as string, Number(r.qty_on_hand || 0)]));
+      const need = new Map<string, number>();
+      for (const item of items) {
+        if (!item.product_id) continue;
+        item.stock = stockMap.get(item.product_id) ?? 0;
+        need.set(item.product_id, (need.get(item.product_id) || 0) + item.qty);
+      }
+      if (!is_preorder) {
+        for (const [pid, qty] of need) {
+          const onHand = stockMap.get(pid) ?? 0;
+          if (onHand < qty) {
+            const name = items.find((i) => i.product_id === pid)?.product_name || pid;
+            errors.push(issue('insufficient_stock', `Недостаточно остатка: ${name}. Нужно ${qty}, на складе ${onHand}.`));
+          }
+        }
+      }
+    }
+  }
+
+  if (is_debt && !(debtPhone || '').trim()) {
+    errors.push(issue('debt_phone', 'Для долга нужен телефон. Укажите его в накладной или исходном сообщении.'));
+  }
+
+  const invoice_date = parseLooseDate(input.invoice_date || '') || input.invoice_date;
+  const invoice_time = parseLooseTime(input.invoice_time || '') || input.invoice_time;
+  const pickup_date = is_preorder
+    ? parseLooseDate(input.pickup_date || '') || input.pickup_date || invoice_date || new Date().toISOString().slice(0, 10)
+    : null;
+  if (invoice_date && !is_preorder) {
+    warnings.push(
+      issue(
+        'invoice_datetime_comment',
+        'Дата и время накладной будут записаны в комментарий. Время создания заказа — текущее.'
+      )
+    );
+  }
+
+  const total_sum = items.reduce((s, i) => s + (i.unresolved ? 0 : i.line_sum), 0);
+  const commentParts: string[] = [];
+  if (invoice_date) commentParts.push(`Накладная: ${invoice_date}${invoice_time ? ` ${invoice_time}` : ''}`);
+  if (input.note) commentParts.push(String(input.note).slice(0, 200));
+  const seller_name = seller ? String(seller.display_name || '') : null;
+  const resolved: DraftResolved = {
+    seller_id: seller?.id || null,
+    seller_name,
+    city_id: city?.id || null,
+    city_name: city ? String(city.name) : null,
+    payment_type,
+    payment_raw: payment_type || '',
+    is_debt,
+    is_preorder,
+    pickup_date,
+    invoice_date,
+    invoice_time,
+    comment: is_debt ? null : commentParts.join('. ') || null,
+    debt_customer_name: is_debt ? seller_name : null,
+    debt_due_at: null,
+    debt_note: is_debt ? input.note || null : null,
+    items,
+    total_sum,
+  };
+  const preview = toPreview(resolved);
+  const idsReady =
+    Boolean(resolved.seller_id && resolved.city_id) &&
+    items.length > 0 &&
+    items.every((i) => i.product_id && !i.unresolved) &&
+    Boolean(payment_type);
+  return { resolved, preview, errors, warnings, can_confirm: errors.length === 0 && idsReady };
 }

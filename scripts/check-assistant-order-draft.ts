@@ -21,8 +21,15 @@ const verify = read('supabase/prod/post_apply_verify_block522.sql');
 const routeChat = read('app/api/assistant/chat/route.ts');
 const routeConfirm = read('app/api/assistant/orders/confirm/route.ts');
 const routeCancel = read('app/api/assistant/orders/cancel/route.ts');
+const routeUpdate = read('app/api/assistant/orders/update/route.ts');
+const routeCatalog = read('app/api/assistant/orders/catalog/route.ts');
 const ui = read('components/AssistantChats.tsx');
 const card = read('components/AssistantOrderDraftCard.tsx');
+const resolve = read('lib/assistant/resolveOrder.ts');
+const summary = read('lib/assistant/draftSummary.ts');
+const updateSql = read('supabase/migrations/20261103291000_assistant_order_draft_update.sql');
+const updateRun = read('supabase/run_assistant_order_draft_update.sql');
+const verifyUpdate = read('supabase/prod/post_apply_verify_block522b.sql');
 const tools = read('lib/assistant/tools.ts');
 const prompt = read('lib/assistant/prompt.ts');
 const runModel = read('lib/assistant/runModel.ts');
@@ -67,7 +74,10 @@ if (!runModel.includes('stripIdentifiers')) fail('Q&A history must mask phones')
 if (!handle.includes('looksLikeInvoice')) fail('invoice heuristic');
 if (!handle.includes('parseInvoiceStructured')) fail('structured parse on invoice path');
 if (!handle.includes('resolveInvoiceDraft')) fail('server-side resolve');
+if (!handle.includes('buildDraftChatMessage')) fail('short draft chat message');
+if (handle.includes('buildDraftMarkdown')) fail('must not dump draft markdown into chat');
 if (handle.includes('confirm_order')) fail('prepare path must not create orders');
+if (!summary.includes('Исправьте их в карточке заказа')) fail('short AI remarks message');
 
 if (!routeChat.includes('generateAssistantTurn')) fail('chat route must split Q&A vs draft');
 if (!routeChat.includes('save_assistant_order_draft')) fail('draft persist');
@@ -99,6 +109,35 @@ if (!routeConfirm.includes('body.draftId') && !routeConfirm.includes("body.draft
 if (!routeCancel.includes('cancel_assistant_order_draft')) fail('cancel RPC');
 if (routeCancel.includes('confirm_order')) fail('cancel must not create orders');
 
+if (!routeUpdate.includes('applyDraftEdit')) fail('update must rebuild on server');
+if (!routeUpdate.includes('update_assistant_order_draft_content')) fail('update RPC');
+if (routeUpdate.includes("rpc('confirm_order'")) fail('update must not confirm_order');
+if (routeUpdate.includes('idempotency_key')) fail('update must not rotate idempotency_key');
+if (!routeUpdate.includes('чужой черновик')) fail('update owner guard');
+if (!routeUpdate.includes('draft_not_editable')) fail('update locked-status guard');
+if (!routeCatalog.includes("eq('role', 'seller')")) fail('catalog sellers only');
+if (!resolve.includes('export async function applyDraftEdit')) fail('applyDraftEdit');
+if (!resolve.includes('total_ready')) fail('preview total_ready');
+if (!resolve.includes('price_retail')) fail('live retail prices');
+
+if (!/^BEGIN;/m.test(updateSql) || !/^COMMIT;/m.test(updateSql)) fail('5.2.2b migration must be transactional');
+if (/CREATE OR REPLACE FUNCTION public\.confirm_order/i.test(updateSql)) fail('update SQL must not rewrite confirm_order');
+if (/UPDATE\s+public\.inventory/i.test(updateSql)) fail('update SQL must not touch inventory');
+if (/INSERT\s+INTO\s+public\.orders/i.test(updateSql)) fail('update SQL must not insert orders');
+if (!updateSql.includes('not_draft_owner')) fail('update SQL owner');
+if (!updateSql.includes('draft_not_editable')) fail('update SQL status lock');
+const updateFnBody = updateSql.slice(updateSql.indexOf('AS $$'), updateSql.lastIndexOf('$$'));
+if (updateFnBody.includes('idempotency_key')) fail('update SQL must not write idempotency_key');
+if (!updateSql.includes('GRANT EXECUTE ON FUNCTION public.update_assistant_order_draft_content')) fail('update grant');
+if (/GRANT EXECUTE ON FUNCTION public\.update_assistant_order_draft_content[^\n]*authenticated/i.test(updateSql)) {
+  fail('authenticated must not update drafts via SQL grant');
+}
+if (!updateRun.includes('update_assistant_order_draft_content')) fail('run SQL missing update rpc');
+const verifyUpdateBare = verifyUpdate.replace(/--.*$/gm, '').replace(/'[^']*'/g, "''");
+if (/^\s*(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/im.test(verifyUpdateBare)) {
+  fail('post_apply_verify_block522b.sql must be SELECT-only');
+}
+
 if (!ui.includes('/api/assistant/orders/')) fail('UI confirm endpoint');
 if (!ui.includes('AssistantOrderDraftCard')) fail('preview card');
 if (!ui.includes("first !== 'pending'")) fail('UI must retry pending confirm once');
@@ -106,8 +145,16 @@ if (ui.includes("role: 'assistant'")) fail('UI must not insert assistant message
 if (!card.includes('Подтвердить заказ')) fail('confirm button');
 if (!card.includes('Исправить')) fail('fix button');
 if (!card.includes('Отмена')) fail('cancel button');
-if (!card.includes('disabled={busy || blocked}')) fail('confirm blocked on errors');
+if (!card.includes('Сохранить изменения')) fail('save edits button');
+if (!card.includes('Цена не определена')) fail('undefined price label');
+if (!card.includes('Итого: не рассчитано')) fail('incomplete total label');
+if (!card.includes("window.confirm")) fail('cancel confirmation');
+if (!card.includes('/api/assistant/orders/update')) fail('card saves via update API');
+if (!card.includes('disabled={busy || blocked')) fail('confirm blocked on errors');
 if (!card.includes('sm:flex-row')) fail('responsive actions');
+if (ui.includes('cancelDraft(id, true)') || ui.includes('onFix=')) fail('Исправить must not cancel the draft');
+if (!ui.includes('onUpdated')) fail('reload after save');
+if (!ui.includes('resolved')) fail('load resolved for edit');
 
 if (/\.rpc\(['\"]confirm_order/i.test(tools)) fail('tools must not confirm orders');
 if (/from\('(?:orders|inventory)'\)\.(insert|update|delete)/i.test(tools)) fail('tools stay read-only');

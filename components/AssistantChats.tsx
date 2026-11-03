@@ -158,7 +158,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     const { data, error: err } = await supabase
       .from('assistant_order_drafts')
       .select(
-        'id, chat_id, owner_id, created_by, user_message_id, assistant_message_id, status, can_confirm, warnings, errors, preview, order_id, order_number, confirmed_by, confirmed_at'
+        'id, chat_id, owner_id, created_by, user_message_id, assistant_message_id, status, can_confirm, warnings, errors, preview, resolved, order_id, order_number, confirmed_by, confirmed_at'
       )
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
@@ -260,15 +260,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
   }
 
-  async function cancelDraft(draftId: string, fix = false) {
+  async function cancelDraft(draftId: string) {
     if (readOnly || busy) return;
     setBusy(true);
     try {
       await runExclusive(`assistant-order-cancel:${draftId}`, () => assistantOrderAction('cancel', draftId));
-      if (fix) {
-        setDraft('');
-        setError('Отправьте исправленную накладную новым сообщением.');
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сеть недоступна.');
     } finally {
@@ -389,8 +385,8 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                             readOnly={readOnly}
                             busy={busy}
                             onConfirm={(id) => void confirmDraft(id)}
-                            onFix={(id) => void cancelDraft(id, true)}
                             onCancel={(id) => void cancelDraft(id)}
+                            onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
                           />
                         ) : null}
                         <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>

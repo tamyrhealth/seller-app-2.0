@@ -4,6 +4,8 @@ export type DraftStatus = 'preview' | 'blocked' | 'confirming' | 'confirmed' | '
 
 export type DraftIssue = { code: string; message: string };
 
+export type DraftCandidate = { id: string; name: string };
+
 export type DraftItemResolved = {
   raw_name: string;
   product_id: string | null;
@@ -14,7 +16,8 @@ export type DraftItemResolved = {
   is_gift: boolean;
   stock: number | null;
   line_sum: number;
-  candidates?: string[];
+  unresolved: boolean;
+  candidates?: DraftCandidate[];
 };
 
 export type DraftResolved = {
@@ -39,11 +42,22 @@ export type DraftResolved = {
   total_sum: number;
 };
 
+export type DraftPreviewItem = {
+  name: string;
+  qty: number;
+  price: number;
+  is_gift: boolean;
+  line_sum: number;
+  unresolved: boolean;
+  candidates?: DraftCandidate[];
+};
+
 export type DraftPreview = {
   seller_name: string | null;
   city_name: string | null;
-  items: { name: string; qty: number; price: number; is_gift: boolean; line_sum: number }[];
+  items: DraftPreviewItem[];
   total_sum: number;
+  total_ready: boolean;
   payment_label: string;
   is_debt: boolean;
   is_preorder: boolean;
@@ -64,6 +78,7 @@ export type AssistantDraftRow = {
   warnings: DraftIssue[];
   errors: DraftIssue[];
   preview: DraftPreview;
+  resolved?: DraftResolved;
   order_id: string | null;
   order_number: string | null;
   confirmed_by: string | null;
