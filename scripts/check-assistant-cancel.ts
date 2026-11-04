@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseCancelIntent } from '../lib/assistant/cancelIntent';
 import { actorCanCancel } from '../lib/assistant/resolveCancel';
+import { resolveCancelCardState } from '../lib/assistant/cancelCardState';
 import { parseOrderNumberQuery } from '../lib/orderNumber';
 import { isAssistantRole } from '../lib/roles';
 
@@ -126,8 +127,33 @@ if (confirm.includes('admin_cancel_order') || confirm.includes("rpc('cancel_orde
 if (!ui.includes('AssistantCancelCard')) fail('cancel card in chats');
 if (!ui.includes('/api/assistant/orders/void')) fail('UI confirms via void route');
 if (!ui.includes('assistant-live-cancel')) fail('exclusive cancel click');
+if (!ui.includes('messageId')) fail('void must receive preview message id');
+if (!ui.includes("action: 'dismiss'")) fail('dismiss must persist via API');
+if (!ui.includes('resolveCancelCardState')) fail('cards must use stored + live cancel state');
+if (!ui.includes("source === 'assistant_cancel'")) fail('follow-up cancel messages must lock old cards');
+if (!ui.includes("payload.ok !== true")) fail('network/partial responses must not lock the card');
+if (ui.includes('function dismissCancelCard') && ui.includes("state: 'dismissed'") && !ui.includes("action: 'dismiss'")) {
+  fail('dismiss must not be local-only');
+}
 if (!card.includes('Подтвердить отмену')) fail('confirm cancel button');
 if (!card.includes('Оставить заказ')) fail('leave order button');
 if (!card.includes('stock_note')) fail('stock consequence on card');
+if (!card.includes('Заказ отменён')) fail('compact canceled status');
+if (!card.includes('Отмена отклонена. Заказ оставлен без изменений')) fail('dismissed copy');
+if (!voidRoute.includes("action === 'dismiss'")) fail('void persists dismiss without RPC');
+if (!voidRoute.includes('persistCancelCardState')) fail('void must persist preview card state');
+if (!voidRoute.includes("state: 'confirmed'")) fail('successful cancel must persist confirmed');
+if (resolveCancelCardState({ storedState: 'preview', preview: { can_cancel: true, status: 'confirmed', errors: [] } as never }) !== 'preview') {
+  fail('open preview stays actionable');
+}
+if (resolveCancelCardState({ storedState: 'preview', liveStatus: 'canceled', preview: { can_cancel: true, status: 'confirmed', errors: [] } as never }) !== 'confirmed') {
+  fail('live canceled order must lock old cards');
+}
+if (resolveCancelCardState({ storedState: 'preview', preview: { can_cancel: true, status: 'confirmed', errors: [{ code: 'already_canceled', message: 'x' }] } as never }) !== 'confirmed') {
+  fail('already_canceled preview must lock buttons');
+}
+if (resolveCancelCardState({ storedState: 'dismissed', preview: { can_cancel: true, status: 'confirmed', errors: [] } as never }) !== 'dismissed') {
+  fail('dismissed stays dismissed when order is still live');
+}
 
 console.log('OK');

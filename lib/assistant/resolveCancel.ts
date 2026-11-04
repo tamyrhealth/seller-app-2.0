@@ -2,12 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { paymentLabel } from '@/lib/assistant/paymentParse';
 import type { PaymentType } from '@/lib/types';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
+import { isCanceledStatus } from '@/lib/assistant/cancelCardState';
 import { parseOrderNumberQuery } from '@/lib/orderNumber';
-
-function isCanceled(status: string | null | undefined, preorderStatus: string | null | undefined): boolean {
-  const s = (status || '').toLowerCase();
-  return s === 'canceled' || s === 'cancelled' || preorderStatus === 'cancelled';
-}
 
 export function actorCanCancel(role: string | null | undefined, canCancelOrders: boolean): {
   allowed: boolean;
@@ -72,7 +68,7 @@ export async function resolveCancelPreview(
     is_gift: it.is_gift === true,
   }));
 
-  const canceled = isCanceled(order.status as string, order.preorder_status as string);
+  const canceled = isCanceledStatus(order.status as string, order.preorder_status as string);
   const willReturn =
     !canceled &&
     (order.is_preorder !== true || order.preorder_status === 'fulfilled');

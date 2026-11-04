@@ -36,7 +36,7 @@ export default function AssistantCancelCard({ preview, state, readOnly, busy, on
         </div>
         <div>
           <dt className="text-gray-500">Статус</dt>
-          <dd className="font-medium">{statusLabel(preview.status)}</dd>
+          <dd className="font-medium">{state === 'confirmed' ? 'Отменён' : statusLabel(preview.status)}</dd>
         </div>
         <div>
           <dt className="text-gray-500">Продавец</dt>
@@ -74,8 +74,10 @@ export default function AssistantCancelCard({ preview, state, readOnly, busy, on
           {e.message}
         </p>
       ))}
-      {state === 'confirmed' ? <p className="mt-1 text-sm text-green-800">Отмена подтверждена.</p> : null}
-      {state === 'dismissed' ? <p className="mt-1 text-sm text-gray-600">Заказ оставлен без изменений.</p> : null}
+      {state === 'confirmed' ? <p className="mt-1 text-sm text-green-800">Заказ отменён</p> : null}
+      {state === 'dismissed' ? (
+        <p className="mt-1 text-sm text-gray-600">Отмена отклонена. Заказ оставлен без изменений.</p>
+      ) : null}
       {!readOnly && canAct ? (
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <button

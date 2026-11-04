@@ -10,6 +10,7 @@ import AssistantOrderDraftCard from '@/components/AssistantOrderDraftCard';
 import AssistantCancelCard from '@/components/AssistantCancelCard';
 import type { AssistantDraftRow } from '@/lib/assistant/orderDraftTypes';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
+import { resolveCancelCardState } from '@/lib/assistant/cancelCardState';
 
 type ChatRow = {
   id: string;
@@ -32,6 +33,8 @@ type MsgRow = {
     state?: string;
     preview?: CancelPreview;
     order_id?: string;
+    source?: string;
+    already_canceled?: boolean;
   };
 };
 
@@ -184,8 +187,55 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
       .select('id, role, content, created_at, metadata')
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
-    if (err) setError(err.message);
-    else setMessages((data || []) as MsgRow[]);
+    if (err) {
+      setError(err.message);
+      await reloadDrafts(chatId);
+      return;
+    }
+    const rows = (data || []) as MsgRow[];
+    const orderIds = [
+      ...new Set(
+        rows
+          .map((m) => (m.metadata?.kind === 'cancel_preview' ? m.metadata.preview?.order_id : ''))
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
+    const live = new Map<string, { status: string | null; preorder_status: string | null }>();
+    if (orderIds.length > 0) {
+      const { data: orders } = await supabase
+        .from('orders')
+        .select('id, status, preorder_status')
+        .in('id', orderIds);
+      for (const row of orders || []) {
+        live.set(row.id as string, {
+          status: (row.status as string | null) || null,
+          preorder_status: (row.preorder_status as string | null) || null,
+        });
+      }
+    }
+    const canceledByHistory = new Set(
+      rows
+        .filter((m) => m.metadata?.source === 'assistant_cancel' && m.metadata.order_id)
+        .map((m) => m.metadata?.order_id as string)
+    );
+    setMessages(
+      rows.map((m) => {
+        if (m.metadata?.kind !== 'cancel_preview' || !m.metadata.preview) return m;
+        const liveRow = live.get(m.metadata.preview.order_id);
+        const historyCanceled = canceledByHistory.has(m.metadata.preview.order_id);
+        const state = resolveCancelCardState({
+          storedState: m.metadata.state,
+          preview: m.metadata.preview,
+          liveStatus: historyCanceled ? 'canceled' : liveRow?.status,
+          livePreorderStatus: liveRow?.preorder_status,
+        });
+        const preview =
+          state === 'confirmed'
+            ? { ...m.metadata.preview, status: 'canceled', can_cancel: false }
+            : m.metadata.preview;
+        return { ...m, metadata: { ...m.metadata, state, preview } };
+      })
+    );
     await reloadDrafts(chatId);
   }
 
@@ -282,18 +332,13 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
         const res = await fetch('/api/assistant/orders/void', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ orderId, chatId: openId }),
+          body: JSON.stringify({ orderId, chatId: openId, messageId }),
         });
         const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
-        if (!res.ok || payload.ok === false) {
+        if (!res.ok || payload.ok !== true) {
           setError(payload.message || 'Не удалось отменить заказ.');
           return;
         }
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === messageId ? { ...m, metadata: { ...m.metadata, state: 'confirmed' } } : m
-          )
-        );
         setError('');
         if (openId) {
           await reloadMessages(openId);
@@ -307,10 +352,34 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
   }
 
-  function dismissCancelCard(messageId: string) {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, metadata: { ...m.metadata, state: 'dismissed' } } : m))
-    );
+  async function dismissCancelCard(messageId: string) {
+    if (readOnly || busy || !openId) return;
+    setBusy(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        setError('Сессия истекла. Войдите снова.');
+        return;
+      }
+      const res = await fetch('/api/assistant/orders/void', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'dismiss', chatId: openId, messageId }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+      if (!res.ok || payload.ok !== true) {
+        setError(payload.message || 'Не удалось сохранить отказ от отмены.');
+        return;
+      }
+      setError('');
+      await reloadMessages(openId);
+      await loadChats();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function cancelDraft(draftId: string) {
@@ -449,7 +518,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                             readOnly={readOnly}
                             busy={busy}
                             onConfirm={() => void confirmLiveCancel(m.metadata?.preview?.order_id || '', m.id)}
-                            onDismiss={() => dismissCancelCard(m.id)}
+                            onDismiss={() => void dismissCancelCard(m.id)}
                           />
                         ) : null}
                         <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>
