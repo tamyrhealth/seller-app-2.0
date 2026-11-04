@@ -4,6 +4,8 @@ export type TransferIssue = { code: string; message: string };
 
 export type TransferCandidate = { id: string; name: string };
 
+export type TransferCityCandidate = { id: string; name: string };
+
 export type TransferItemResolved = {
   raw_name: string;
   product_id: string | null;
@@ -18,10 +20,10 @@ export type TransferItemResolved = {
 export type TransferResolved = {
   from_city_id: string | null;
   from_city_name: string | null;
-  from_city_candidates?: string[];
+  from_city_candidates?: TransferCityCandidate[];
   to_city_id: string | null;
   to_city_name: string | null;
-  to_city_candidates?: string[];
+  to_city_candidates?: TransferCityCandidate[];
   comment: string | null;
   items: TransferItemResolved[];
 };
@@ -29,6 +31,8 @@ export type TransferResolved = {
 export type TransferPreview = {
   from_city_name: string | null;
   to_city_name: string | null;
+  from_city_candidates?: TransferCityCandidate[];
+  to_city_candidates?: TransferCityCandidate[];
   items: {
     name: string;
     qty: number;

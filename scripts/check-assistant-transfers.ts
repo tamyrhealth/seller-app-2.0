@@ -1,7 +1,13 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseTransferIntent } from '../lib/assistant/transferIntent';
-import { actorCanCreateTransfer } from '../lib/assistant/resolveTransfer';
+import {
+  actorCanCreateTransfer,
+  applyTransferEdit,
+  chooseTransferCity,
+  shouldFlagInsufficientStock,
+  stockQtyForSource,
+} from '../lib/assistant/resolveTransfer';
 import { matchTransferCities } from '../lib/assistant/transferCityMatch';
 import { qtyValidationError } from '../lib/assistant/qty';
 import { isAssistantRole } from '../lib/roles';
@@ -58,6 +64,63 @@ const cities = [
 ];
 if (matchTransferCities('алмата', cities)[0]?.name !== 'Алматы') fail('almaty alias');
 if (matchTransferCities('aktau', cities)[0]?.name !== 'Ақтау') fail('aktau alias');
+
+const almatyWarehouses = [
+  { id: 'galia', name: 'Алматы-Ғалия', is_active: true },
+  { id: 'office', name: 'Алматы-Офис', is_active: true },
+  { id: 'aktau', name: 'Ақтау', is_active: true },
+];
+const ambiguousFrom = chooseTransferCity('Алматы', almatyWarehouses, 'from');
+if (ambiguousFrom.id) fail('Алматы must stay ambiguous when two warehouses match');
+if (ambiguousFrom.candidates.length !== 2) fail(`expected 2 Almaty warehouses, got ${ambiguousFrom.candidates.length}`);
+if (!ambiguousFrom.errors.some((e) => e.code === 'from_city_ambiguous')) fail('ambiguous source needs from_city_ambiguous');
+if (!ambiguousFrom.candidates.some((c) => c.id === 'galia') || !ambiguousFrom.candidates.some((c) => c.id === 'office')) {
+  fail('ambiguous source must expose warehouse ids for picker');
+}
+const uniqueTo = chooseTransferCity('Ақтау', almatyWarehouses, 'to');
+if (uniqueTo.id !== 'aktau') fail('Aktau must resolve uniquely');
+
+if (stockQtyForSource(null, new Map([['p1', 10]]), 'p1') !== null) fail('no stock until source warehouse is chosen');
+if (stockQtyForSource('galia', new Map(), 'p1') !== 0) fail('missing inventory row is 0 only after warehouse chosen');
+if (stockQtyForSource('galia', new Map([['p1', 7]]), 'p1') !== 7) fail('stock comes from chosen warehouse');
+if (shouldFlagInsufficientStock(null, 2, 0)) fail('do not flag shortage while warehouse is ambiguous');
+if (shouldFlagInsufficientStock('galia', 2, null)) fail('do not flag shortage without a stock reading');
+if (!shouldFlagInsufficientStock('galia', 2, 0)) fail('flag shortage when chosen warehouse has 0');
+if (shouldFlagInsufficientStock('galia', 2, 5)) fail('enough stock must not block');
+
+const powder = { id: 'p1', name: 'Порошок', unit: 'pcs', price_retail: 1, is_active: true };
+const tea = { id: 'p2', name: 'Чай', unit: 'pcs', price_retail: 1, is_active: true };
+const afterPick = applyTransferEdit(
+  almatyWarehouses,
+  [powder, tea],
+  new Map([
+    ['p1', 10],
+    ['p2', 4],
+  ]),
+  'galia',
+  'aktau',
+  [
+    { product_id: 'p1', qty: 2, raw_name: 'Порошок' },
+    { product_id: 'p2', qty: 1, raw_name: 'Чай' },
+  ],
+  { role: 'admin', can_create_transfers: false }
+);
+if (!afterPick.can_confirm) fail(`chosen warehouse with stock must confirm, errors=${JSON.stringify(afterPick.errors)}`);
+if (afterPick.resolved.items.some((i) => i.stock == null)) fail('stock must be filled after warehouse pick');
+
+const shortPick = applyTransferEdit(
+  almatyWarehouses,
+  [powder],
+  new Map([['p1', 1]]),
+  'office',
+  'aktau',
+  [{ product_id: 'p1', qty: 2, raw_name: 'Порошок' }],
+  { role: 'admin', can_create_transfers: false }
+);
+if (shortPick.can_confirm) fail('true shortage must block confirm');
+if (!shortPick.errors.some((e) => e.code === 'insufficient_stock' && e.message.includes('есть 1'))) {
+  fail('true shortage must show actual remainder');
+}
 
 if (qtyValidationError(1.25, 'kg')) fail('kg 3 decimals allowed');
 if (!qtyValidationError(1.2501, 'kg')) fail('kg 4 decimals blocked');
@@ -149,6 +212,11 @@ if (!card.includes("draft.status === 'confirmed'") && !card.includes('draft.tran
 }
 if (!card.includes('Повторить подтверждение')) fail('network retry must remain possible while confirming');
 if (!card.includes('showEditCancel')) fail('edit/cancel hidden after send and while confirming');
+if (!card.includes('needFromPick')) fail('card must offer warehouse picker when source is ambiguous');
+if (!card.includes('insufficient_stock')) fail('card must hide fake shortage until warehouse chosen');
+if (!read('lib/assistant/resolveTransfer.ts').includes('shouldFlagInsufficientStock')) {
+  fail('stock check must skip unresolved source warehouse');
+}
 
 const mapper = read('lib/stockTransfer.ts');
 if (!mapper.includes('Transfer permission denied')) fail('TransfersPanel must map new permission error');

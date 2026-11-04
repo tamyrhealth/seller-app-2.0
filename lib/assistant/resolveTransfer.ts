@@ -4,6 +4,7 @@ import { qtyValidationError } from '@/lib/assistant/qty';
 import { matchTransferCities } from '@/lib/assistant/transferCityMatch';
 import type { TransferIntent } from '@/lib/assistant/transferIntent';
 import type {
+  TransferCityCandidate,
   TransferIssue,
   TransferItemResolved,
   TransferPreview,
@@ -39,6 +40,8 @@ function toPreview(resolved: TransferResolved): TransferPreview {
   return {
     from_city_name: resolved.from_city_name,
     to_city_name: resolved.to_city_name,
+    from_city_candidates: resolved.from_city_candidates,
+    to_city_candidates: resolved.to_city_candidates,
     items: resolved.items.map((i) => ({
       name: i.product_name || i.raw_name,
       qty: i.qty,
@@ -52,14 +55,33 @@ function toPreview(resolved: TransferResolved): TransferPreview {
 
 type CityRow = { id: string; name: string; is_active: boolean | null };
 
-function pickCity(
+export function stockQtyForSource(
+  fromCityId: string | null | undefined,
+  stockByProduct: Map<string, number>,
+  productId: string | null | undefined
+): number | null {
+  if (!fromCityId || !productId) return null;
+  if (!stockByProduct.has(productId)) return 0;
+  return Number(stockByProduct.get(productId) || 0);
+}
+
+export function shouldFlagInsufficientStock(
+  fromCityId: string | null | undefined,
+  qty: number,
+  stock: number | null
+): boolean {
+  if (!fromCityId || stock == null) return false;
+  return qty > stock;
+}
+
+export function chooseTransferCity(
   query: string,
   cities: CityRow[],
   label: 'from' | 'to'
 ): {
   id: string | null;
   name: string | null;
-  candidates: string[];
+  candidates: TransferCityCandidate[];
   errors: TransferIssue[];
 } {
   const errors: TransferIssue[] = [];
@@ -68,15 +90,20 @@ function pickCity(
     errors.push(issue(`${label}_city_missing`, `${prefix} город не указан.`));
     return { id: null, name: query || null, candidates: [], errors };
   }
-  const matches = matchTransferCities(query, cities);
+  const matches = matchTransferCities(query, cities.filter((c) => c.is_active !== false));
   if (matches.length === 0) {
     errors.push(issue(`${label}_city_not_found`, `${prefix} город «${query}» не найден. Новый склад не создаю.`));
     return { id: null, name: query, candidates: [], errors };
   }
+  const candidates = matches.map((c) => ({ id: c.id, name: c.name }));
   if (matches.length > 1) {
-    const names = matches.map((c) => c.name);
-    errors.push(issue(`${label}_city_ambiguous`, `${prefix} город неоднозначен: ${names.join(', ')}. Уточните.`));
-    return { id: null, name: query, candidates: names, errors };
+    errors.push(
+      issue(
+        `${label}_city_ambiguous`,
+        `${prefix} склад неоднозначен. Выберите один: ${candidates.map((c) => c.name).join(', ')}.`
+      )
+    );
+    return { id: null, name: query, candidates, errors };
   }
   const city = matches[0];
   const row = cities.find((c) => c.id === city.id);
@@ -91,7 +118,8 @@ function resolveItem(
   raw_name: string,
   qty: number,
   catalog: CatalogProduct[],
-  stockByProduct: Map<string, number>
+  stockByProduct: Map<string, number>,
+  fromCityId: string | null
 ): TransferItemResolved {
   const match = resolveProductQuery(raw_name, catalog);
   const chosen = match.chosen;
@@ -122,7 +150,7 @@ function resolveItem(
       candidates: (match.candidates || []).map((p) => ({ id: p.id, name: p.name })),
     };
   }
-  const stock = stockByProduct.has(chosen.id) ? Number(stockByProduct.get(chosen.id)) : 0;
+  const stock = stockQtyForSource(fromCityId, stockByProduct, chosen.id);
   return {
     raw_name,
     product_id: chosen.id,
@@ -152,8 +180,8 @@ export async function resolveTransferDraft(
   const cities = (cityRows || []) as CityRow[];
   const catalog = (productRows || []) as CatalogProduct[];
 
-  const from = pickCity(intent.fromQuery, cities, 'from');
-  const to = pickCity(intent.toQuery, cities, 'to');
+  const from = chooseTransferCity(intent.fromQuery, cities, 'from');
+  const to = chooseTransferCity(intent.toQuery, cities, 'to');
   errors.push(...from.errors, ...to.errors);
   if (from.id && to.id && from.id === to.id) {
     errors.push(issue('same_city', 'Исходный и конечный склады должны отличаться.'));
@@ -175,7 +203,7 @@ export async function resolveTransferDraft(
     errors.push(issue('items_missing', 'Не указаны товары и количества для отправки.'));
   }
   for (const row of intent.items.slice(0, 40)) {
-    const item = resolveItem(row.raw_name, row.qty, catalog, stockByProduct);
+    const item = resolveItem(row.raw_name, row.qty, catalog, stockByProduct, from.id);
     items.push(item);
     const product = catalog.find((p) => p.id === item.product_id);
     if (!item.product_id) {
@@ -205,12 +233,11 @@ export async function resolveTransferDraft(
     }
     const qtyErr = qtyValidationError(item.qty, item.unit);
     if (qtyErr) errors.push(issue('qty_invalid', `${item.product_name}: ${qtyErr}`));
-    const stock = item.stock ?? 0;
-    if (item.qty > stock) {
+    if (shouldFlagInsufficientStock(from.id, item.qty, item.stock)) {
       errors.push(
         issue(
           'insufficient_stock',
-          `Недостаточно остатков «${item.product_name}» в ${from.name || 'исходном городе'}: нужно ${item.qty}, есть ${stock}.`
+          `Недостаточно остатков «${item.product_name}» в ${from.name || 'исходном городе'}: нужно ${item.qty}, есть ${item.stock}.`
         )
       );
     }
@@ -282,9 +309,9 @@ export function applyTransferEdit(
       errors.push(issue('product_inactive', `Товар «${product.name}» неактивен.`));
     }
     const qtyErr = qtyValidationError(row.qty, product.unit);
-    const stock = stockByProduct.has(product.id) ? Number(stockByProduct.get(product.id)) : 0;
+    const stock = stockQtyForSource(fromRow?.id || null, stockByProduct, product.id);
     if (qtyErr) errors.push(issue('qty_invalid', `${product.name}: ${qtyErr}`));
-    if (row.qty > stock) {
+    if (shouldFlagInsufficientStock(fromRow?.id || null, row.qty, stock)) {
       errors.push(
         issue(
           'insufficient_stock',
@@ -323,8 +350,9 @@ export function buildTransferChatMessage(card: TransferPreviewCard): string {
     `Черновик перемещения: ${from} → ${to}.`,
     ...card.preview.items.map((i) => {
       const unit = i.unit || '';
-      const stock = i.stock == null ? '?' : String(i.stock);
-      return `• ${i.name}: ${i.qty}${unit ? ` ${unit}` : ''} (остаток ${stock})`;
+      const stock =
+        i.stock == null ? 'остаток после выбора исходного склада' : `остаток ${i.stock}`;
+      return `• ${i.name}: ${i.qty}${unit ? ` ${unit}` : ''} (${stock})`;
     }),
   ];
   if (card.errors.length) lines.push(...card.errors.map((e) => `Ошибка: ${e.message}`));
