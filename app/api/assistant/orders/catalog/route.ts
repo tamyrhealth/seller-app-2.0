@@ -28,7 +28,7 @@ export async function GET(req: Request) {
   const [{ data: cities }, { data: sellers }, { data: products }] = await Promise.all([
     userDb.from('cities').select('id, name, is_active').eq('is_active', true).order('name'),
     userDb.from('profiles').select('id, display_name, city_id, role, is_active').eq('role', 'seller').eq('is_active', true).order('display_name'),
-    userDb.from('products').select('id, name, unit, is_active').eq('is_active', true).order('name'),
+    userDb.from('products').select('id, name, unit, price_retail, is_active').eq('is_active', true).order('name'),
   ]);
 
   const cityName = new Map((cities || []).map((c) => [c.id as string, String(c.name || '')]));
@@ -43,7 +43,12 @@ export async function GET(req: Request) {
         city_id: s.city_id,
         city_name: cityName.get(s.city_id as string) || '',
       })),
-    products: (products || []).map((p) => ({ id: p.id, name: p.name, unit: p.unit })),
+    products: (products || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      unit: p.unit,
+      price_retail: Number(p.price_retail || 0),
+    })),
     payments: [
       { id: 'cash', label: 'Наличные' },
       { id: 'kaspi', label: 'Kaspi' },

@@ -51,7 +51,7 @@ export async function POST(req: Request) {
       is_gift: row.is_gift === true,
       raw_name: typeof row.raw_name === 'string' ? row.raw_name.slice(0, 120) : '',
     }))
-    .filter((row) => UUID_RE.test(row.product_id));
+    .filter((row) => UUID_RE.test(row.product_id) || row.raw_name);
   if (!mapped.length) return jsonError(400, 'items', 'Добавьте товары из каталога.');
 
   let userDb;

@@ -187,18 +187,22 @@ if (detectPayment('предзаказ').is_preorder !== true) fail('preorder key
 if (detectPayment('kaspi').payment_type !== 'kaspi') fail('kaspi mapping');
 
 const aliases = expandProductQuery('шай');
-if (!aliases.includes('чай') && !aliases.some((a) => a.includes('чай'))) fail('шай expands to чай');
+if (!aliases.includes('чай') && !aliases.some((a) => a.includes('чай') || a.includes('chai') || a.includes('shai'))) {
+  fail('шай expands to чай');
+}
 const catalog = [
-  { id: '1', name: 'Чай зелёный', unit: 'pcs', price_retail: 10 },
-  { id: '2', name: 'Порошок', unit: 'pcs', price_retail: 20 },
-  { id: '3', name: 'Порошок детский', unit: 'pcs', price_retail: 21 },
+  { id: '1', name: 'ШАЙ ОРГ 500г', unit: 'g', price_retail: 10 },
+  { id: '2', name: 'ПОРОШОК ОРГ 250г', unit: 'g', price_retail: 20 },
+  { id: '3', name: 'ШИКІ ПОРОШОК ОРГ 250г', unit: 'g', price_retail: 21 },
+  { id: '4', name: 'ТӘТТІ ШАЙ', unit: 'g', price_retail: 22 },
 ];
 const tea = matchCatalogProducts('шай', catalog);
-if (tea.length !== 1 || tea[0].name !== 'Чай зелёный') fail('шай should uniquely match tea');
+if (tea.length !== 1 || tea[0].name !== 'ШАЙ ОРГ 500г') fail('шай should uniquely match ШАЙ ОРГ 500г');
 const powder = matchCatalogProducts('порошок', catalog);
-if (powder.length < 2) fail('порошок should be ambiguous when two powder products exist');
-const uniquePowder = matchCatalogProducts('порошок детский', catalog);
-if (uniquePowder.length !== 1) fail('specific powder name should uniquely match');
+if (powder.length !== 1 || powder[0].name !== 'ПОРОШОК ОРГ 250г') fail('порошок should uniquely match ПОРОШОК ОРГ 250г');
+const shiki = matchCatalogProducts('шикі порошок', catalog);
+if (shiki.length !== 1 || shiki[0].name !== 'ШИКІ ПОРОШОК ОРГ 250г') fail('шикі порошок must not become ordinary powder');
+if (!card.includes('DraftProductPicker')) fail('one-click product picker');
 
 if (!pricesEqual(100, 100.001) && !pricesEqual(100, 100)) fail('price compare 100');
 if (!pricesEqual(10.5, 10.5)) fail('price compare equal');

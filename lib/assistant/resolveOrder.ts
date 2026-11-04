@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PaymentType } from '@/lib/types';
 import type { ParsedInvoice } from '@/lib/assistant/invoiceParse';
-import { matchCatalogProducts, normalizeName, type CatalogProduct } from '@/lib/assistant/productAliases';
+import { resolveProductQuery, type CatalogProduct } from '@/lib/assistant/productAliases';
+import { resolveSellerAndCity } from '@/lib/assistant/sellerCityMatch';
 import {
   detectPayment,
   parseLooseDate,
@@ -92,87 +93,22 @@ export async function resolveInvoiceDraft(
     .eq('role', 'seller')
     .eq('is_active', true);
   if (sellerErr) throw new Error(sellerErr.message);
-  const sellerList = (sellers || []).filter((s) => s.city_id);
-
-  const sellerQuery = normalizeName(parsed.seller_name);
-  const sellerMatches = sellerQuery
-    ? sellerList.filter((s) => {
-        const name = normalizeName(String(s.display_name || ''));
-        return name === sellerQuery || name.includes(sellerQuery) || sellerQuery.includes(name);
-      })
-    : [];
-
-  let seller_id: string | null = null;
-  let seller_name: string | null = parsed.seller_name || null;
-  const seller_candidates = sellerMatches.map((s) => ({
-    id: s.id as string,
-    name: String(s.display_name || ''),
-    city: cityList.find((c) => c.id === s.city_id)?.name || '',
-  }));
-
-  if (!sellerQuery) {
-    errors.push(issue('seller_missing', 'Продавец не указан. Напишите имя существующего продавца.'));
-  } else if (sellerMatches.length === 0) {
-    errors.push(issue('seller_not_found', `Продавец «${parsed.seller_name}» не найден. Нового продавца не создаю.`));
-  } else if (sellerMatches.length > 1) {
-    const exact = sellerMatches.filter((s) => normalizeName(String(s.display_name || '')) === sellerQuery);
-    if (exact.length === 1) {
-      seller_id = exact[0].id as string;
-      seller_name = String(exact[0].display_name || parsed.seller_name);
-    } else {
-      errors.push(
-        issue(
-          'seller_ambiguous',
-          `Несколько продавцов с похожим именем: ${seller_candidates.map((s) => `${s.name} (${s.city || 'город ?'})`).join(', ')}. Уточните.`
-        )
-      );
-    }
-  } else {
-    seller_id = sellerMatches[0].id as string;
-    seller_name = String(sellerMatches[0].display_name || parsed.seller_name);
-  }
-
-  const cityQuery = normalizeName(parsed.city_name);
-  const cityMatches = cityQuery
-    ? cityList.filter((c) => {
-        const name = normalizeName(String(c.name || ''));
-        return name === cityQuery || name.includes(cityQuery) || cityQuery.includes(name);
-      })
-    : [];
-
-  let city_id: string | null = null;
-  let city_name: string | null = parsed.city_name || null;
-  const city_candidates = cityMatches.map((c) => String(c.name || ''));
-
-  const sellerRow = seller_id ? sellerList.find((s) => s.id === seller_id) : null;
-  if (cityMatches.length > 1) {
-    const exact = cityMatches.filter((c) => normalizeName(String(c.name || '')) === cityQuery);
-    if (exact.length === 1) {
-      city_id = exact[0].id as string;
-      city_name = String(exact[0].name);
-    } else {
-      errors.push(issue('city_ambiguous', `Несколько городов: ${city_candidates.join(', ')}. Уточните.`));
-    }
-  } else if (cityMatches.length === 1) {
-    city_id = cityMatches[0].id as string;
-    city_name = String(cityMatches[0].name);
-  } else if (cityQuery) {
-    errors.push(issue('city_not_found', `Город «${parsed.city_name}» не найден. Новый склад не создаю.`));
-  } else if (sellerRow?.city_id) {
-    city_id = sellerRow.city_id as string;
-    city_name = cityList.find((c) => c.id === city_id)?.name || null;
-  } else {
-    errors.push(issue('city_missing', 'Город не указан, и продавец не выбран однозначно. Укажите город.'));
-  }
-
-  if (sellerRow?.city_id && city_id && sellerRow.city_id !== city_id) {
-    errors.push(
-      issue(
-        'seller_city_mismatch',
-        `Продавец привязан к городу ${cityList.find((c) => c.id === sellerRow.city_id)?.name || ''}, а в накладной другой город.`
-      )
-    );
-  }
+  const sellerList = (sellers || [])
+    .filter((s) => s.city_id)
+    .map((s) => ({
+      id: s.id as string,
+      display_name: String(s.display_name || ''),
+      city_id: s.city_id as string,
+    }));
+  const cityRows = cityList.map((c) => ({ id: c.id as string, name: String(c.name || '') }));
+  const placed = resolveSellerAndCity(parsed.seller_name, parsed.city_name, sellerList, cityRows);
+  errors.push(...placed.errors);
+  const seller_id = placed.seller_id;
+  const seller_name = placed.seller_name;
+  const seller_candidates = placed.seller_candidates;
+  const city_id = placed.city_id;
+  const city_name = placed.city_name;
+  const city_candidates = placed.city_candidates;
 
   const { data: products, error: productErr } = await db
     .from('products')
@@ -190,17 +126,17 @@ export async function resolveInvoiceDraft(
 
   const items: DraftItemResolved[] = [];
   for (const raw of parsedItems) {
-    const matches = matchCatalogProducts(raw.name, catalog);
+    const matched = resolveProductQuery(raw.name, catalog);
     const qty = Number(raw.qty);
-    const chosen = matches.length === 1 ? matches[0] : null;
+    const chosen = matched.chosen;
     const qtyErr = chosen ? qtyValidationError(qty, chosen.unit) : qtyValidationError(qty, 'pcs');
-    if (matches.length === 0) {
+    if (matched.reason === 'none') {
       errors.push(issue('product_not_found', `Товар «${raw.name}» не найден. Новый товар не создаю.`));
-    } else if (matches.length > 1) {
+    } else if (!chosen) {
       errors.push(
         issue(
           'product_ambiguous',
-          `Товар «${raw.name}» неоднозначен: ${matches.map((p) => p.name).join(', ')}. Уточните.`
+          `Товар «${raw.name}» неоднозначен. Выберите вариант в карточке.`
         )
       );
     }
@@ -220,8 +156,12 @@ export async function resolveInvoiceDraft(
       line_sum: unresolved ? 0 : qtySafe * price,
       unresolved,
       candidates:
-        matches.length > 1
-          ? matches.map((p) => ({ id: p.id, name: p.name }))
+        !chosen && matched.candidates.length
+          ? matched.candidates.slice(0, 5).map((p) => ({
+              id: p.id,
+              name: p.name,
+              price: Number(p.price_retail || 0),
+            }))
           : undefined,
     });
   }
@@ -421,7 +361,7 @@ export type DraftEditInput = {
   invoice_date: string | null;
   invoice_time: string | null;
   pickup_date: string | null;
-  items: { product_id: string; qty: number; is_gift: boolean; raw_name?: string }[];
+  items: { product_id?: string; qty: number; is_gift: boolean; raw_name?: string }[];
   note?: string | null;
 };
 
@@ -469,24 +409,45 @@ export async function applyDraftEdit(db: SupabaseClient, input: DraftEditInput, 
     errors.push(issue('items_missing', 'Добавьте хотя бы один товар.'));
   }
 
-  const productIds = [...new Set(input.items.map((i) => i.product_id).filter(Boolean))];
-  let products: { id: string; name: string; unit: string | null; price_retail: number | null; is_active: boolean }[] = [];
+  const productIds = [...new Set(input.items.map((i) => i.product_id).filter(Boolean))] as string[];
+  const { data: catalogRows, error: catalogErr } = await db
+    .from('products')
+    .select('id, name, unit, price_retail, is_active')
+    .eq('is_active', true);
+  if (catalogErr) throw new Error(catalogErr.message);
+  const catalog = (catalogRows || []) as CatalogProduct[];
+  let specified: { id: string; name: string; unit: string | null; price_retail: number | null; is_active: boolean }[] = [];
   if (productIds.length) {
     const { data, error: pErr } = await db
       .from('products')
       .select('id, name, unit, price_retail, is_active')
       .in('id', productIds);
     if (pErr) throw new Error(pErr.message);
-    products = (data || []) as typeof products;
+    specified = (data || []) as typeof specified;
   }
-  const byId = new Map(products.map((p) => [p.id, p]));
+  const byId = new Map(specified.map((p) => [p.id, p]));
 
   const items: DraftItemResolved[] = [];
   for (const raw of input.items) {
-    const product = byId.get(raw.product_id);
     const qty = Number(raw.qty);
+    let product = raw.product_id ? byId.get(raw.product_id) : undefined;
+    const rematch = product ? null : resolveProductQuery(raw.raw_name || '', catalog);
+    if (!product && rematch?.chosen) {
+      product = {
+        id: rematch.chosen.id,
+        name: rematch.chosen.name,
+        unit: rematch.chosen.unit,
+        price_retail: rematch.chosen.price_retail,
+        is_active: true,
+      };
+    }
     if (!product || product.is_active === false) {
-      errors.push(issue('product_not_found', `Товар не найден.`));
+      if (raw.product_id) errors.push(issue('product_not_found', 'Товар не найден.'));
+      else if (!rematch || rematch.reason === 'none') {
+        errors.push(issue('product_not_found', `Товар «${raw.raw_name || ''}» не найден. Новый товар не создаю.`));
+      } else {
+        errors.push(issue('product_ambiguous', `Товар «${raw.raw_name || ''}» неоднозначен. Выберите вариант в карточке.`));
+      }
       items.push({
         raw_name: raw.raw_name || 'товар',
         product_id: null,
@@ -498,6 +459,14 @@ export async function applyDraftEdit(db: SupabaseClient, input: DraftEditInput, 
         stock: null,
         line_sum: 0,
         unresolved: true,
+        candidates:
+          rematch && rematch.candidates.length
+            ? rematch.candidates.slice(0, 5).map((p) => ({
+                id: p.id,
+                name: p.name,
+                price: Number(p.price_retail || 0),
+              }))
+            : undefined,
       });
       continue;
     }

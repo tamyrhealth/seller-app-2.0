@@ -4,7 +4,7 @@ export type DraftStatus = 'preview' | 'blocked' | 'confirming' | 'confirmed' | '
 
 export type DraftIssue = { code: string; message: string };
 
-export type DraftCandidate = { id: string; name: string };
+export type DraftCandidate = { id: string; name: string; price?: number };
 
 export type DraftItemResolved = {
   raw_name: string;

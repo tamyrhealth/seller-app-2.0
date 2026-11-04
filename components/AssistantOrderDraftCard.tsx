@@ -4,13 +4,14 @@ import { useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import type { AssistantDraftRow, DraftCandidate, DraftItemResolved } from '@/lib/assistant/orderDraftTypes';
 import type { PaymentType } from '@/lib/types';
+import DraftProductPicker from '@/components/DraftProductPicker';
 
 function money(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
 }
 
 type CatalogSeller = { id: string; name: string; city_id: string; city_name: string };
-type CatalogProduct = { id: string; name: string; unit: string | null };
+type CatalogProduct = { id: string; name: string; unit: string | null; price_retail?: number };
 type CatalogCity = { id: string; name: string };
 type CatalogPayment = { id: string; label: string };
 
@@ -129,6 +130,90 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
     return data.session?.access_token || '';
   }
 
+  async function loadCatalog(access: string) {
+    const res = await fetch('/api/assistant/orders/catalog', {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    const payload = (await res.json().catch(() => ({}))) as Catalog & { ok?: boolean; message?: string };
+    if (!res.ok || payload.ok === false) {
+      throw new Error(payload.message || 'Не удалось загрузить справочники.');
+    }
+    const next = {
+      sellers: payload.sellers || [],
+      products: payload.products || [],
+      cities: payload.cities || [],
+      payments: payload.payments || [],
+    };
+    setCatalog(next);
+    return next;
+  }
+
+  async function persistItems(nextLines: EditLine[]) {
+    const access = await token();
+    if (!access) {
+      setLocalError('Сессия истекла. Войдите снова.');
+      return false;
+    }
+    const seller = sellerId || draft.resolved?.seller_id || '';
+    const city = cityId || draft.resolved?.city_id || '';
+    if (!seller || !city) {
+      setLocalError('Сначала выберите продавца и город.');
+      return false;
+    }
+    const items = nextLines.map((line) => ({
+      product_id: line.product_id,
+      qty: Number(String(line.qty).replace(',', '.')),
+      is_gift: line.is_gift,
+      raw_name: line.raw_name,
+    }));
+    const body: SaveBody = {
+      seller_id: seller,
+      city_id: city,
+      payment_type: isDebt ? 'debt' : paymentType || draft.resolved?.payment_type || null,
+      is_debt: isDebt,
+      is_preorder: isPreorder && !isDebt,
+      invoice_date: invoiceDate || draft.resolved?.invoice_date || null,
+      invoice_time: invoiceTime || draft.resolved?.invoice_time || null,
+      pickup_date: isPreorder ? pickupDate || draft.resolved?.pickup_date || null : null,
+      items,
+    };
+    const res = await fetch('/api/assistant/orders/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access}` },
+      body: JSON.stringify({ draftId: draft.id, ...body }),
+    });
+    const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+    if (!res.ok || payload.ok === false) {
+      setLocalError(payload.message || 'Не удалось сохранить черновик.');
+      return false;
+    }
+    await onUpdated();
+    return true;
+  }
+
+  async function pickResolvedProduct(idx: number, product: { id: string; name: string; price: number }) {
+    if (readOnly || busy || locked || saving) return;
+    const next = seedLines(draft).map((line, i) =>
+      i === idx ? { ...line, product_id: product.id, raw_name: product.name, unresolved: false } : line
+    );
+    setSaving(true);
+    setLocalError('');
+    try {
+      const access = await token();
+      if (!access) {
+        setLocalError('Сессия истекла. Войдите снова.');
+        return;
+      }
+      if (!catalog) await loadCatalog(access);
+      const ok = await persistItems(next);
+      if (ok) setEditing(false);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function openEdit() {
     if (readOnly || busy || locked) return;
     setLocalError('');
@@ -137,20 +222,12 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
       setLocalError('Сессия истекла. Войдите снова.');
       return;
     }
-    const res = await fetch('/api/assistant/orders/catalog', {
-      headers: { Authorization: `Bearer ${access}` },
-    });
-    const payload = (await res.json().catch(() => ({}))) as Catalog & { ok?: boolean; message?: string };
-    if (!res.ok || payload.ok === false) {
-      setLocalError(payload.message || 'Не удалось загрузить справочники.');
+    try {
+      await loadCatalog(access);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Не удалось загрузить справочники.');
       return;
     }
-    setCatalog({
-      sellers: payload.sellers || [],
-      products: payload.products || [],
-      cities: payload.cities || [],
-      payments: payload.payments || [],
-    });
     setSellerId(draft.resolved?.seller_id || '');
     setCityId(draft.resolved?.city_id || '');
     setPaymentType(draft.resolved?.is_debt ? 'debt' : draft.resolved?.payment_type || '');
@@ -192,42 +269,8 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
     setSaving(true);
     setLocalError('');
     try {
-      const access = await token();
-      if (!access) {
-        setLocalError('Сессия истекла. Войдите снова.');
-        return;
-      }
-      const items = lines
-        .filter((line) => line.product_id)
-        .map((line) => ({
-          product_id: line.product_id,
-          qty: Number(line.qty.replace(',', '.')),
-          is_gift: line.is_gift,
-          raw_name: line.raw_name,
-        }));
-      const body: SaveBody = {
-        seller_id: sellerId,
-        city_id: cityId,
-        payment_type: isDebt ? 'debt' : paymentType || null,
-        is_debt: isDebt,
-        is_preorder: isPreorder && !isDebt,
-        invoice_date: invoiceDate || null,
-        invoice_time: invoiceTime || null,
-        pickup_date: isPreorder ? pickupDate || null : null,
-        items,
-      };
-      const res = await fetch('/api/assistant/orders/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access}` },
-        body: JSON.stringify({ draftId: draft.id, ...body }),
-      });
-      const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
-      if (!res.ok || payload.ok === false) {
-        setLocalError(payload.message || 'Не удалось сохранить черновик.');
-        return;
-      }
-      setEditing(false);
-      await onUpdated();
+      const ok = await persistItems(lines);
+      if (ok) setEditing(false);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Сеть недоступна.');
     } finally {
@@ -352,31 +395,19 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
           <ul className="space-y-2">
             {lines.map((line, idx) => (
               <li key={`${line.raw_name}-${idx}`} className="rounded-lg border border-gray-200 p-2">
-                <label className="block text-sm">
+                <div className="text-sm">
                   <span className="text-gray-500">{line.raw_name ? `Товар (${line.raw_name})` : 'Товар'}</span>
-                  <select
-                    value={line.product_id}
-                    onChange={(e) => {
-                      const product = catalog.products.find((p) => p.id === e.target.value);
-                      changeLine(idx, { product_id: e.target.value, raw_name: product?.name || line.raw_name, unresolved: !e.target.value });
-                    }}
-                    className="mt-0.5 w-full rounded border border-gray-300 bg-white px-2 py-1.5"
-                  >
-                    <option value="">Выберите товар</option>
-                    {(line.candidates.length ? line.candidates : []).map((c) => (
-                      <option key={`c-${c.id}`} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                    {catalog.products
-                      .filter((p) => !line.candidates.some((c) => c.id === p.id))
-                      .map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
+                  {line.product_id ? (
+                    <p className="font-medium">{catalog.products.find((p) => p.id === line.product_id)?.name || line.raw_name}</p>
+                  ) : null}
+                  <DraftProductPicker
+                    rawName={line.raw_name}
+                    selectedId={line.product_id}
+                    candidates={line.candidates}
+                    catalog={catalog.products}
+                    onPick={(p) => changeLine(idx, { product_id: p.id, raw_name: p.name, unresolved: false })}
+                  />
+                </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
                   <label className="flex items-center gap-1">
                     Кол-во
@@ -441,8 +472,27 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
                   <span>
                     {item.name}
                     {item.is_gift ? ' (подарок)' : ''} × {item.qty}
-                    {item.candidates?.length ? (
-                      <span className="block text-xs text-amber-800">Варианты: {item.candidates.map((c) => c.name).join(', ')}</span>
+                    {item.unresolved === true ? (
+                      <div className="mt-1">
+                        <DraftProductPicker
+                          rawName={item.name}
+                          selectedId=""
+                          candidates={item.candidates || []}
+                          catalog={catalog?.products || []}
+                          disabled={readOnly || busy || locked || saving}
+                          onOpenOther={() => {
+                            void token().then(async (access) => {
+                              if (!access) return;
+                              try {
+                                await loadCatalog(access);
+                              } catch (err) {
+                                setLocalError(err instanceof Error ? err.message : 'Каталог недоступен.');
+                              }
+                            });
+                          }}
+                          onPick={(p) => void pickResolvedProduct(idx, p)}
+                        />
+                      </div>
                     ) : null}
                   </span>
                   <span className="shrink-0 text-right">
