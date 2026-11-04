@@ -25,7 +25,9 @@ export default function SellerPage() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    const onVis = () => setRefreshKey((k) => k + 1);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') setRefreshKey((k) => k + 1);
+    };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
@@ -36,7 +38,6 @@ export default function SellerPage() {
       return;
     }
     let cancelled = false;
-    setLoading(true);
     setError(null);
     (async () => {
       try {

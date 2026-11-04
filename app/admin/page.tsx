@@ -53,7 +53,9 @@ export default function AdminPage() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    const onVis = () => setRefreshKey((k) => k + 1);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') setRefreshKey((k) => k + 1);
+    };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);

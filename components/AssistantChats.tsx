@@ -11,6 +11,7 @@ import AssistantCancelCard from '@/components/AssistantCancelCard';
 import type { AssistantDraftRow } from '@/lib/assistant/orderDraftTypes';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
 import { resolveCancelCardState } from '@/lib/assistant/cancelCardState';
+import { readUserUi, writeUserUi } from '@/lib/uiStorage';
 
 type ChatRow = {
   id: string;
@@ -69,6 +70,9 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const [retry, setRetry] = useState<{ content: string; clientMessageId: string } | null>(null);
   const [drafts, setDrafts] = useState<AssistantDraftRow[]>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const draftsByChatRef = useRef<Record<string, string>>({});
   const readOnly = audit;
   const sendingRef = useRef(false);
 
@@ -112,18 +116,49 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   }, [loadChats]);
 
   useEffect(() => {
+    if (audit || !profile?.id) return;
+    const saved = readUserUi<{ openId?: string | null; draftsByChat?: Record<string, string> }>(
+      profile.id,
+      'assistant-ui'
+    );
+    if (saved?.draftsByChat) {
+      draftsByChatRef.current = { ...saved.draftsByChat, ...draftsByChatRef.current };
+    }
+  }, [audit, profile?.id]);
+
+  useEffect(() => {
+    if (audit || openId || !profile?.id || chats.length === 0) return;
+    const saved = readUserUi<{ openId?: string | null }>(profile.id, 'assistant-ui');
+    if (saved?.openId && chats.some((c) => c.id === saved.openId)) setOpenId(saved.openId);
+  }, [audit, chats, openId, profile?.id]);
+
+  useEffect(() => {
+    if (audit || !profile?.id) return;
+    writeUserUi(profile.id, 'assistant-ui', { openId, draftsByChat: draftsByChatRef.current });
+  }, [audit, profile?.id, openId, draft]);
+
+  useEffect(() => {
     if (!openId) {
       setMessages([]);
       setDrafts([]);
       return;
     }
+    stickToBottomRef.current = true;
+    const savedDraft = draftsByChatRef.current[openId];
+    if (savedDraft) setDraft(savedDraft);
     void reloadMessages(openId);
+  }, [openId]);
+
+  useEffect(() => {
+    if (!openId) return;
     const chat = chats.find((c) => c.id === openId);
-    setRename(chat?.title || '');
+    if (chat) setRename(chat.title || '');
   }, [openId, chats]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = threadRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages, openId]);
 
   async function createChat() {
@@ -403,7 +438,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     setBusy(true);
     setWaitingAi(true);
     setError('');
-    if (!existing) setDraft('');
+    if (!existing) {
+      setDraft('');
+      if (openId) draftsByChatRef.current[openId] = '';
+    }
     try {
       await runExclusive(`assistant-send:${openId}`, () => requestAssistant(openId, content, clientMessageId));
     } catch (err) {
@@ -441,7 +479,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
               <li key={c.id}>
                 <button
                   type="button"
-                  onClick={() => setOpenId(c.id)}
+                  onClick={() => {
+                    if (openId) draftsByChatRef.current[openId] = draft;
+                    setOpenId(c.id);
+                    setDraft(draftsByChatRef.current[c.id] || '');
+                  }}
                   className={`w-full text-left px-3 py-2 rounded ${openId === c.id ? 'bg-blue-100' : 'bg-gray-100'}`}
                 >
                   {num ? <span className="block text-xs font-mono text-gray-600">{num}</span> : null}
@@ -475,7 +517,16 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
               </div>
             </div>
             {waitingAi ? <p className="text-xs text-blue-800 mb-2">ИИ отвечает…</p> : null}
-            <div className="flex-1 overflow-y-auto space-y-2 mb-2">
+            <div
+              ref={threadRef}
+              data-scroll-persist="assistant-thread"
+              onScroll={() => {
+                const el = threadRef.current;
+                if (!el) return;
+                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+              }}
+              className="flex-1 overflow-y-auto space-y-2 mb-2"
+            >
               {messages.length === 0 ? (
                 <p className="text-sm text-gray-600">Сообщений нет</p>
               ) : (
@@ -546,7 +597,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                 <div className="flex gap-2 items-end">
                   <textarea
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => {
+                      setDraft(e.target.value);
+                      if (openId) draftsByChatRef.current[openId] = e.target.value;
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();

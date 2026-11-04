@@ -18,6 +18,8 @@ import {
 } from '@/lib/adminStats';
 import { downloadAdminStatsExcel } from '@/lib/adminStatsExport';
 import { fetchRecognizedWindow, fetchUnpaidDebts } from '@/lib/fetchAdminStatsOrders';
+import { useAuth } from '@/lib/auth';
+import { readUserUi, writeUserUi } from '@/lib/uiStorage';
 import {
   Bar,
   BarChart,
@@ -70,6 +72,7 @@ function fillDays(period: PeriodSpec, daily: AdminStatsResult['daily']) {
 
 export default function AdminStatsPage() {
   const { t } = useTranslation();
+  const { profile } = useAuth();
   const deletedSellerLabel = t('admin.deletedSeller');
   const [preset, setPreset] = useState<StatsPeriodPreset>('today');
   const [customFrom, setCustomFrom] = useState('');
@@ -89,6 +92,33 @@ export default function AdminStatsPage() {
   const [sellerSort, setSellerSort] = useState<SellerSort>('revenue');
   const [productSort, setProductSort] = useState<ProductSort>('qty');
   const [topMode, setTopMode] = useState<'qty' | 'revenue'>('qty');
+  const [filtersReady, setFiltersReady] = useState(false);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    const saved = readUserUi<{
+      preset: StatsPeriodPreset;
+      customFrom: string;
+      customTo: string;
+      sellerId: string | 'all';
+      cityId: string | 'all';
+      productId: string | 'all';
+    }>(profile.id, 'admin-stats');
+    if (saved) {
+      if (saved.preset) setPreset(saved.preset);
+      setCustomFrom(saved.customFrom || '');
+      setCustomTo(saved.customTo || '');
+      if (saved.sellerId) setSellerId(saved.sellerId);
+      if (saved.cityId) setCityId(saved.cityId);
+      if (saved.productId) setProductId(saved.productId);
+    }
+    setFiltersReady(true);
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile?.id || !filtersReady) return;
+    writeUserUi(profile.id, 'admin-stats', { preset, customFrom, customTo, sellerId, cityId, productId });
+  }, [profile?.id, filtersReady, preset, customFrom, customTo, sellerId, cityId, productId]);
 
   useEffect(() => {
     supabase

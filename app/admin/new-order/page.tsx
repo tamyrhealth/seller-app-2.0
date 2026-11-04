@@ -18,6 +18,7 @@ import {
   runConfirmOrderOnce,
 } from '@/lib/orderIdempotency';
 import type { Product, PaymentType } from '@/lib/types';
+import { clearOrderFormDraft, useOrderFormDraft, type OrderFormDraft } from '@/lib/orderFormDraft';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -85,6 +86,47 @@ export default function AdminNewOrderPage() {
 
   const selectedSeller = sellers.find((seller) => seller.id === selectedSellerId) ?? null;
   const cityId = selectedSeller?.city_id ?? null;
+  const formDraft = useMemo<OrderFormDraft>(
+    () => ({
+      selectedSellerId,
+      search,
+      cart,
+      paymentType,
+      comment,
+      orderType,
+      pickupDate,
+      debtCustomerPhone,
+      debtCustomerName,
+      debtDueAt,
+      debtNote,
+    }),
+    [
+      selectedSellerId,
+      search,
+      cart,
+      paymentType,
+      comment,
+      orderType,
+      pickupDate,
+      debtCustomerPhone,
+      debtCustomerName,
+      debtDueAt,
+      debtNote,
+    ]
+  );
+  useOrderFormDraft(profile?.id, 'staff-new-order', formDraft, (saved) => {
+    setSelectedSellerId(saved.selectedSellerId || '');
+    setSearch(saved.search || '');
+    setCart(saved.cart || []);
+    setPaymentType(saved.paymentType || '');
+    setComment(saved.comment || '');
+    setOrderType(saved.orderType || 'ordinary');
+    setPickupDate(saved.pickupDate || '');
+    setDebtCustomerPhone(saved.debtCustomerPhone || '');
+    setDebtCustomerName(saved.debtCustomerName || '');
+    setDebtDueAt(saved.debtDueAt || '');
+    setDebtNote(saved.debtNote || '');
+  });
 
   const filteredProducts = useMemo(() => {
     return products.filter((p) => p.is_active && p.name.toLowerCase().includes(search.toLowerCase()));
@@ -382,6 +424,7 @@ export default function AdminNewOrderPage() {
       setDebtCustomerName('');
       setDebtDueAt('');
       setDebtNote('');
+      clearOrderFormDraft(profile.id, 'staff-new-order');
       router.refresh();
       router.push(
         `${profile.role === 'manager' ? '/manager/orders' : '/admin/orders'}${orderId ? `?id=${orderId}` : ''}`
@@ -490,6 +533,7 @@ export default function AdminNewOrderPage() {
                   onClick={() => {
                     if (!confirm(t('newOrder.clearCartConfirm'))) return;
                     setCart([]);
+                    clearOrderFormDraft(profile?.id, 'staff-new-order');
                   }}
                   className="shrink-0 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 hover:border-gray-400"
                 >

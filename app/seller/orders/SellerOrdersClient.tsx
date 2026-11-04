@@ -12,6 +12,7 @@ import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber } from '@/lib/orderNumber';
 import { runExclusive } from '@/lib/exclusiveAsync';
+import { useUserUiState } from '@/lib/useUserUiState';
 
 type OrderItemRow = {
   id?: string;
@@ -59,7 +60,7 @@ export default function SellerOrdersClient() {
   const router = useRouter();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'day' | 'week' | 'month'>('day');
+  const [tab, setTab] = useUserUiState<'day' | 'week' | 'month'>(profile?.id, 'seller-orders-tab', 'day');
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
 

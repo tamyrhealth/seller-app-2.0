@@ -20,6 +20,7 @@ export default function Protected({ children, role }: ProtectedProps) {
   const { t } = useTranslation();
   const [deviceOk, setDeviceOk] = useState<boolean | null>(null);
   const checkDoneRef = useRef(false);
+  const [entered, setEntered] = useState(false);
 
   useEffect(() => {
     if (!authReady) return;
@@ -58,7 +59,22 @@ export default function Protected({ children, role }: ProtectedProps) {
     });
   }, [authReady, session?.user?.id, profile, role, signOut, t]);
 
-  if (!authReady) {
+  useEffect(() => {
+    if (!session) {
+      setEntered(false);
+      return;
+    }
+    if (
+      profile &&
+      profile.is_active !== false &&
+      deviceOk === true &&
+      (!role || roleMatches(role, profile.role))
+    ) {
+      setEntered(true);
+    }
+  }, [session, profile, deviceOk, role]);
+
+  if (!authReady && !entered) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <p className="text-lg">Загрузка...</p>
@@ -71,6 +87,7 @@ export default function Protected({ children, role }: ProtectedProps) {
   }
 
   if (!profile) {
+    if (entered) return <>{children}</>;
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-4">
         <p className="text-center text-gray-700">Профиль не найден</p>
@@ -106,7 +123,7 @@ export default function Protected({ children, role }: ProtectedProps) {
     return null;
   }
 
-  if (deviceOk !== true) {
+  if (deviceOk !== true && !entered) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <p className="text-lg">{t('common.loading')}</p>

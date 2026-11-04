@@ -107,7 +107,9 @@ if (!i18n.includes("'orders.status.canceled': 'Болдырылған'")) fail('
 if (!chatsUi.includes("placeholder=\"Сообщение\"")) fail('message placeholder');
 if (!chatsUi.includes('open_empty_assistant_chat')) fail('UI must call empty-chat RPC');
 if (!chatsUi.includes('Shift') && !chatsUi.includes('shiftKey')) fail('Shift+Enter newline');
-if (!chatsUi.includes('scrollIntoView')) fail('auto-scroll');
+if (!chatsUi.includes('el.scrollTop = el.scrollHeight') || !chatsUi.includes('stickToBottomRef')) {
+  fail('auto-scroll');
+}
 if (!chatsUi.includes('justify-end')) fail('user messages on the right');
 if (chatsUi.includes('Текст сохранится в истории диалога')) fail('old placeholder must go');
 if (chatsUi.includes('ИИ пока не подключён')) fail('offline AI banner must be removed after 5.2.1');

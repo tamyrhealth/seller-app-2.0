@@ -20,6 +20,8 @@ import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber, parseOrderNumberQuery } from '@/lib/orderNumber';
 import { runExclusive } from '@/lib/exclusiveAsync';
+import { useAuth } from '@/lib/auth';
+import { readUserUi, writeUserUi } from '@/lib/uiStorage';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -54,8 +56,21 @@ function firstDayOfMonthISO() {
   return d.toISOString().slice(0, 10);
 }
 
+type SavedOrderFilters = {
+  filterCity: string;
+  filterSeller: string;
+  filterStatus: string;
+  startDate: string;
+  endDate: string;
+  viewMode: 'all' | 'preorders' | 'debts';
+  filterPreorderStatus: PreorderStatus | '';
+  filterDebtStatus: string;
+  numberSearch: string;
+};
+
 export default function AdminOrdersPage() {
   const { t } = useTranslation();
+  const { profile } = useAuth();
   const ensureActive = useEnsureActiveDevice();
   const [orders, setOrders] = useState<Order[]>([]);
   const [cities, setCities] = useState<City[]>([]);
@@ -76,6 +91,51 @@ export default function AdminOrdersPage() {
   const [payingDebtId, setPayingDebtId] = useState<string | null>(null);
   const [debtPaymentMethod, setDebtPaymentMethod] = useState<string>('');
   const [numberSearch, setNumberSearch] = useState('');
+  const [filtersReady, setFiltersReady] = useState(false);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    const saved = readUserUi<SavedOrderFilters>(profile.id, 'admin-orders');
+    if (saved) {
+      setFilterCity(saved.filterCity || '');
+      setFilterSeller(saved.filterSeller || '');
+      setFilterStatus(saved.filterStatus || '');
+      if (saved.startDate) setStartDate(saved.startDate);
+      if (saved.endDate) setEndDate(saved.endDate);
+      if (saved.viewMode) setViewMode(saved.viewMode);
+      setFilterPreorderStatus(saved.filterPreorderStatus || '');
+      if (saved.filterDebtStatus) setFilterDebtStatus(saved.filterDebtStatus);
+      setNumberSearch(saved.numberSearch || '');
+    }
+    setFiltersReady(true);
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile?.id || !filtersReady) return;
+    writeUserUi(profile.id, 'admin-orders', {
+      filterCity,
+      filterSeller,
+      filterStatus,
+      startDate,
+      endDate,
+      viewMode,
+      filterPreorderStatus,
+      filterDebtStatus,
+      numberSearch,
+    } satisfies SavedOrderFilters);
+  }, [
+    profile?.id,
+    filtersReady,
+    filterCity,
+    filterSeller,
+    filterStatus,
+    startDate,
+    endDate,
+    viewMode,
+    filterPreorderStatus,
+    filterDebtStatus,
+    numberSearch,
+  ]);
   const [orderHistory, setOrderHistory] = useState<Array<{
     id: string;
     created_at: string;

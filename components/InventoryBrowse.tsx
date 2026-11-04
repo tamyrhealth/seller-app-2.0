@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import type { City } from '@/lib/types';
 import { useTranslation } from '@/lib/i18n';
+import { useAuth } from '@/lib/auth';
+import { useUserUiState } from '@/lib/useUserUiState';
 
 type StockRow = {
   city_id: string;
@@ -16,10 +18,14 @@ type StockRow = {
 
 export default function InventoryBrowse() {
   const { t } = useTranslation();
+  const { profile } = useAuth();
   const [cities, setCities] = useState<City[]>([]);
   const [rows, setRows] = useState<StockRow[]>([]);
-  const [selectedCity, setSelectedCity] = useState<string>('ALL');
-  const [search, setSearch] = useState('');
+  const [ui, setUi] = useUserUiState(profile?.id, 'inventory-browse', { selectedCity: 'ALL', search: '' });
+  const selectedCity = ui.selectedCity;
+  const search = ui.search;
+  const setSelectedCity = (selectedCity: string) => setUi((prev) => ({ ...prev, selectedCity }));
+  const setSearch = (search: string) => setUi((prev) => ({ ...prev, search }));
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 

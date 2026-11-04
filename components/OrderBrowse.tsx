@@ -6,6 +6,8 @@ import { useTranslation } from '@/lib/i18n';
 import { displayOrderNumber, parseOrderNumberQuery } from '@/lib/orderNumber';
 import { isCanceledStatus, orderStatusI18nKey } from '@/lib/orderStatus';
 import type { City, Order, Profile } from '@/lib/types';
+import { useAuth } from '@/lib/auth';
+import { useUserUiState } from '@/lib/useUserUiState';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -39,15 +41,33 @@ const LIST_SELECT =
 
 const DETAIL_SELECT = `${LIST_SELECT}, comment, fulfilled_at, debt_due_at, debt_paid_at, debt_customer_name, debt_customer_phone, debt_note, order_items(id, product_name_snapshot, qty, price, line_sum, is_gift)`;
 
+type BrowseFilters = {
+  filterCity: string;
+  filterSeller: string;
+  filterStatus: string;
+  numberSearch: string;
+};
+
 export default function OrderBrowse() {
   const { t } = useTranslation();
+  const { profile } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [cities, setCities] = useState<City[]>([]);
   const [sellers, setSellers] = useState<Profile[]>([]);
-  const [filterCity, setFilterCity] = useState('');
-  const [filterSeller, setFilterSeller] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [numberSearch, setNumberSearch] = useState('');
+  const [filters, setFilters] = useUserUiState<BrowseFilters>(profile?.id, 'order-browse', {
+    filterCity: '',
+    filterSeller: '',
+    filterStatus: '',
+    numberSearch: '',
+  });
+  const filterCity = filters.filterCity;
+  const filterSeller = filters.filterSeller;
+  const filterStatus = filters.filterStatus;
+  const numberSearch = filters.numberSearch;
+  const setFilterCity = (filterCity: string) => setFilters((prev) => ({ ...prev, filterCity }));
+  const setFilterSeller = (filterSeller: string) => setFilters((prev) => ({ ...prev, filterSeller }));
+  const setFilterStatus = (filterStatus: string) => setFilters((prev) => ({ ...prev, filterStatus }));
+  const setNumberSearch = (numberSearch: string) => setFilters((prev) => ({ ...prev, numberSearch }));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
