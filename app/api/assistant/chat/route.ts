@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { isAssistantRole } from '@/lib/roles';
 import { ASSISTANT_USER_MESSAGE_MAX } from '@/lib/assistant/limits';
 import { generateAssistantTurn } from '@/lib/assistant/handleTurn';
+import { parseCancelIntent } from '@/lib/assistant/cancelIntent';
 import { createServiceClient, createUserClient, readBearerToken } from '@/lib/assistant/supabaseServer';
 
 export const runtime = 'nodejs';
@@ -58,7 +59,7 @@ export async function POST(req: Request) {
 
   const { data: profile, error: profileErr } = await userDb
     .from('profiles')
-    .select('id, role, is_active')
+    .select('id, role, is_active, can_cancel_orders')
     .eq('id', user.id)
     .maybeSingle();
   if (profileErr || !profile) return jsonError(403, 'forbidden', 'Профиль недоступен.');
@@ -111,7 +112,8 @@ export async function POST(req: Request) {
     return jsonError(409, 'message_mismatch', 'Этот запрос уже сохранён с другим текстом.', false);
   }
 
-  if (!process.env.OPENAI_API_KEY) {
+  const cancelIntent = parseCancelIntent(storedContent);
+  if (!cancelIntent && !process.env.OPENAI_API_KEY) {
     return jsonError(503, 'missing_openai_key', 'Сервер без OPENAI_API_KEY. Сообщение сохранено, ответ ИИ недоступен.', true);
   }
 
@@ -160,7 +162,10 @@ export async function POST(req: Request) {
     const last = rows[rows.length - 1];
     const withoutCurrent =
       last?.role === 'user' && last.content === storedContent ? rows.slice(0, -1) : rows;
-    const turn = await generateAssistantTurn(userDb, withoutCurrent, storedContent);
+    const turn = await generateAssistantTurn(userDb, withoutCurrent, storedContent, {
+      role: profile.role as string,
+      can_cancel_orders: profile.can_cancel_orders === true,
+    });
     let text = turn.content;
     if (turn.draft) {
       const { error: saveErr } = await service.rpc('save_assistant_order_draft', {
@@ -216,6 +221,19 @@ export async function POST(req: Request) {
             request_id: clientMessageId,
             kind: 'order_draft',
             draft_id: turn.draft.id,
+          },
+        })
+        .eq('id', assistantMessageId);
+    } else if (turn.cancel && assistantMessageId) {
+      await service
+        .from('assistant_messages')
+        .update({
+          metadata: {
+            source: 'assistant_cancel',
+            request_id: clientMessageId,
+            kind: 'cancel_preview',
+            state: turn.cancel.can_cancel ? 'preview' : 'blocked',
+            preview: turn.cancel,
           },
         })
         .eq('id', assistantMessageId);
