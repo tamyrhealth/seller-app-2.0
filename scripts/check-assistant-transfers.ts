@@ -214,6 +214,9 @@ if (!card.includes('Повторить подтверждение')) fail('netwo
 if (!card.includes('showEditCancel')) fail('edit/cancel hidden after send and while confirming');
 if (!card.includes('needFromPick')) fail('card must offer warehouse picker when source is ambiguous');
 if (!card.includes('insufficient_stock')) fail('card must hide fake shortage until warehouse chosen');
+if (!card.includes('!sent && sourceReady && item.stock != null')) {
+  fail('confirmed transfer card must hide pre-send stock remainder');
+}
 if (!read('lib/assistant/resolveTransfer.ts').includes('shouldFlagInsufficientStock')) {
   fail('stock check must skip unresolved source warehouse');
 }

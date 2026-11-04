@@ -291,7 +291,7 @@ export default function AssistantTransferDraftCard({
             <li key={`${item.name}-${idx}`}>
               {item.name}: {item.qty}
               {item.unit ? ` ${item.unit}` : ''}
-              {sourceReady && item.stock != null ? ` · остаток ${item.stock}` : ''}
+              {!sent && sourceReady && item.stock != null ? ` · остаток ${item.stock}` : ''}
               {item.unresolved ? ' · не распознан' : ''}
             </li>
           ))}
