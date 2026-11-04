@@ -134,47 +134,32 @@ export default function AdminProductsPage() {
     });
   }
 
-  async function handleDelete(p: Product) {
+  async function hideProduct(p: Product) {
     const confirmed = window.confirm(
-      `Удалить товар ${p.name}? Это действие нельзя отменить.`
+      `Скрыть «${p.name}»? Товар исчезнет из новых заказов и каталога ИИ. История заказов, остатки и движения склада сохранятся.`
     );
     if (!confirmed) return;
-
-    const { data: invRows } = await supabase
-      .from('inventory')
-      .select('id')
-      .eq('product_id', p.id)
-      .limit(1);
-    const { data: orderItemRows } = await supabase
-      .from('order_items')
-      .select('id')
-      .eq('product_id', p.id)
-      .limit(1);
-
-    const hasDeps = (invRows?.length ?? 0) > 0 || (orderItemRows?.length ?? 0) > 0;
-
-    if (hasDeps) {
-      const { error } = await supabase
-        .from('products')
-        .update({ is_active: false })
-        .eq('id', p.id);
+    await runExclusive(`product-hide:${p.id}`, async () => {
+      const { error } = await supabase.from('products').update({ is_active: false }).eq('id', p.id);
       if (error) {
-        alert('Не удалось удалить товар. Попробуйте снова.');
+        alert(error.message || 'Не удалось скрыть товар.');
         return;
       }
-      alert(
-        'Товар используется в остатках/заказах. Он скрыт (архивирован), но не удалён.'
-      );
-    } else {
-      const { error } = await supabase.from('products').delete().eq('id', p.id);
+      if (editingId === p.id) setForm((prev) => ({ ...prev, is_active: false }));
+      await load();
+    });
+  }
+
+  async function restoreProduct(p: Product) {
+    await runExclusive(`product-restore:${p.id}`, async () => {
+      const { error } = await supabase.from('products').update({ is_active: true }).eq('id', p.id);
       if (error) {
-        alert('Не удалось удалить товар. Попробуйте снова.');
+        alert(error.message || 'Не удалось восстановить товар.');
         return;
       }
-    }
-
-    if (editingId === p.id) resetForm();
-    await load();
+      if (editingId === p.id) setForm((prev) => ({ ...prev, is_active: true }));
+      await load();
+    });
   }
 
   function startEdit(p: Product) {
@@ -326,12 +311,23 @@ export default function AdminProductsPage() {
                     >
                       Редактировать
                     </button>
-                    <button
-                      onClick={() => handleDelete(p)}
-                      className="px-3 py-1 bg-red-600 text-white rounded text-sm"
-                    >
-                      Удалить
-                    </button>
+                    {p.is_active ? (
+                      <button
+                        type="button"
+                        onClick={() => void hideProduct(p)}
+                        className="px-3 py-1 bg-orange-100 text-orange-800 rounded text-sm"
+                      >
+                        Скрыть
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void restoreProduct(p)}
+                        className="px-3 py-1 bg-green-600 text-white rounded text-sm"
+                      >
+                        Восстановить
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
