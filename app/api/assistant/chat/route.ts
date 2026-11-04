@@ -3,6 +3,7 @@ import { isAssistantRole } from '@/lib/roles';
 import { ASSISTANT_USER_MESSAGE_MAX } from '@/lib/assistant/limits';
 import { generateAssistantTurn } from '@/lib/assistant/handleTurn';
 import { parseCancelIntent } from '@/lib/assistant/cancelIntent';
+import { parseTransferIntent } from '@/lib/assistant/transferIntent';
 import { createServiceClient, createUserClient, readBearerToken } from '@/lib/assistant/supabaseServer';
 
 export const runtime = 'nodejs';
@@ -57,11 +58,19 @@ export async function POST(req: Request) {
   const user = authData?.user;
   if (authErr || !user?.id) return jsonError(401, 'unauthorized', 'Сессия недействительна.');
 
-  const { data: profile, error: profileErr } = await userDb
+  let profileQuery = await userDb
     .from('profiles')
-    .select('id, role, is_active, can_cancel_orders')
+    .select('id, role, is_active, can_cancel_orders, can_create_transfers')
     .eq('id', user.id)
     .maybeSingle();
+  if (profileQuery.error && /can_create_transfers/i.test(profileQuery.error.message)) {
+    profileQuery = await userDb
+      .from('profiles')
+      .select('id, role, is_active, can_cancel_orders')
+      .eq('id', user.id)
+      .maybeSingle();
+  }
+  const { data: profile, error: profileErr } = profileQuery;
   if (profileErr || !profile) return jsonError(403, 'forbidden', 'Профиль недоступен.');
   if (profile.is_active === false) return jsonError(403, 'inactive', 'Учётная запись отключена.');
   if (!isAssistantRole(profile.role)) {
@@ -113,7 +122,8 @@ export async function POST(req: Request) {
   }
 
   const cancelIntent = parseCancelIntent(storedContent);
-  if (!cancelIntent && !process.env.OPENAI_API_KEY) {
+  const transferIntent = parseTransferIntent(storedContent);
+  if (!cancelIntent && !transferIntent && !process.env.OPENAI_API_KEY) {
     return jsonError(503, 'missing_openai_key', 'Сервер без OPENAI_API_KEY. Сообщение сохранено, ответ ИИ недоступен.', true);
   }
 
@@ -165,6 +175,7 @@ export async function POST(req: Request) {
     const turn = await generateAssistantTurn(userDb, withoutCurrent, storedContent, {
       role: profile.role as string,
       can_cancel_orders: profile.can_cancel_orders === true,
+      can_create_transfers: (profile as { can_create_transfers?: boolean }).can_create_transfers === true,
     });
     let text = turn.content;
     if (turn.draft) {
@@ -187,6 +198,30 @@ export async function POST(req: Request) {
         if (/assistant_order_drafts|save_assistant_order_draft|schema cache/i.test(saveErr.message)) {
           text += '\n\nЧерновик заказа не сохранён: сначала примените SQL этапа 5.2.2.';
           turn.draft = null;
+        } else {
+          throw saveErr;
+        }
+      }
+    }
+    if (turn.transfer) {
+      const { error: saveErr } = await service.rpc('save_assistant_stock_transfer_draft', {
+        p_id: turn.transfer.id,
+        p_chat_id: chatId,
+        p_owner_id: user.id,
+        p_created_by: user.id,
+        p_user_message_id: userMessageId || null,
+        p_status: turn.transfer.status,
+        p_can_confirm: turn.transfer.can_confirm,
+        p_warnings: turn.transfer.warnings,
+        p_errors: turn.transfer.errors,
+        p_resolved: turn.transfer.resolved,
+        p_preview: turn.transfer.preview,
+        p_idempotency_key: turn.transfer.idempotency_key,
+      });
+      if (saveErr) {
+        if (/assistant_stock_transfer_drafts|save_assistant_stock_transfer_draft|schema cache/i.test(saveErr.message)) {
+          text += '\n\nЧерновик перемещения не сохранён: сначала примените SQL этапа 5.2.5.';
+          turn.transfer = null;
         } else {
           throw saveErr;
         }
@@ -224,6 +259,22 @@ export async function POST(req: Request) {
           },
         })
         .eq('id', assistantMessageId);
+    } else if (turn.transfer && assistantMessageId) {
+      await service.rpc('attach_assistant_stock_transfer_draft_message', {
+        p_id: turn.transfer.id,
+        p_assistant_message_id: assistantMessageId,
+      });
+      await service
+        .from('assistant_messages')
+        .update({
+          metadata: {
+            source: 'assistant_transfer',
+            request_id: clientMessageId,
+            kind: 'transfer_draft',
+            draft_id: turn.transfer.id,
+          },
+        })
+        .eq('id', assistantMessageId);
     } else if (turn.cancel && assistantMessageId) {
       await service
         .from('assistant_messages')
@@ -238,7 +289,11 @@ export async function POST(req: Request) {
         })
         .eq('id', assistantMessageId);
     }
-    return NextResponse.json({ ok: true, reused: false, draftId: turn.draft?.id || null });
+    return NextResponse.json({
+      ok: true,
+      reused: false,
+      draftId: turn.draft?.id || turn.transfer?.id || null,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'openai_error';
     await service.rpc('fail_assistant_generation', {

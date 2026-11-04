@@ -20,6 +20,7 @@ export default function AdminUsersPage() {
     city_id: '',
     is_active: true,
     can_cancel_orders: false,
+    can_create_transfers: false,
   });
   const [editForm, setEditForm] = useState({
     display_name: '',
@@ -27,6 +28,7 @@ export default function AdminUsersPage() {
     city_id: '',
     is_active: true,
     can_cancel_orders: false,
+    can_create_transfers: false,
   });
 
   useEffect(() => {
@@ -58,6 +60,7 @@ export default function AdminUsersPage() {
     };
     if (linkForm.role === 'manager') {
       linkPayload.can_cancel_orders = linkForm.can_cancel_orders;
+      linkPayload.can_create_transfers = linkForm.can_create_transfers;
     }
 
     const { error } = await supabase.from('profiles').upsert(linkPayload, { onConflict: 'id' });
@@ -65,6 +68,7 @@ export default function AdminUsersPage() {
     if (error) {
       if (
         error.message.includes('can_cancel_orders') ||
+        error.message.includes('can_create_transfers') ||
         error.message.includes('manager') ||
         error.message.includes('profiles_role_check')
       ) {
@@ -82,6 +86,7 @@ export default function AdminUsersPage() {
       city_id: '',
       is_active: true,
       can_cancel_orders: false,
+      can_create_transfers: false,
     });
     setShowLinkForm(false);
     load();
@@ -98,6 +103,7 @@ export default function AdminUsersPage() {
     };
     if (editForm.role === 'manager') {
       editPayload.can_cancel_orders = editForm.can_cancel_orders;
+      editPayload.can_create_transfers = editForm.can_create_transfers;
     }
 
     const { error } = await supabase.from('profiles').update(editPayload).eq('id', editProfile.id);
@@ -105,6 +111,7 @@ export default function AdminUsersPage() {
     if (error) {
       if (
         error.message.includes('can_cancel_orders') ||
+        error.message.includes('can_create_transfers') ||
         error.message.includes('manager') ||
         error.message.includes('profiles_role_check')
       ) {
@@ -204,14 +211,24 @@ export default function AdminUsersPage() {
                 Активен
               </label>
               {linkForm.role === 'manager' && (
-                <label className="flex items-center gap-2 mb-2 text-gray-900">
-                  <input
-                    type="checkbox"
-                    checked={linkForm.can_cancel_orders}
-                    onChange={(e) => setLinkForm({ ...linkForm, can_cancel_orders: e.target.checked })}
-                  />
-                  Разрешить отмену заказов
-                </label>
+                <>
+                  <label className="flex items-center gap-2 mb-2 text-gray-900">
+                    <input
+                      type="checkbox"
+                      checked={linkForm.can_cancel_orders}
+                      onChange={(e) => setLinkForm({ ...linkForm, can_cancel_orders: e.target.checked })}
+                    />
+                    Разрешить отмену заказов
+                  </label>
+                  <label className="flex items-center gap-2 mb-2 text-gray-900">
+                    <input
+                      type="checkbox"
+                      checked={linkForm.can_create_transfers}
+                      onChange={(e) => setLinkForm({ ...linkForm, can_create_transfers: e.target.checked })}
+                    />
+                    Разрешить создание перемещений
+                  </label>
+                </>
               )}
               <div className="flex gap-2">
                 <button
@@ -271,14 +288,24 @@ export default function AdminUsersPage() {
                 Активен
               </label>
               {editForm.role === 'manager' && (
-                <label className="flex items-center gap-2 mb-2 text-gray-900">
-                  <input
-                    type="checkbox"
-                    checked={editForm.can_cancel_orders}
-                    onChange={(e) => setEditForm({ ...editForm, can_cancel_orders: e.target.checked })}
-                  />
-                  Разрешить отмену заказов
-                </label>
+                <>
+                  <label className="flex items-center gap-2 mb-2 text-gray-900">
+                    <input
+                      type="checkbox"
+                      checked={editForm.can_cancel_orders}
+                      onChange={(e) => setEditForm({ ...editForm, can_cancel_orders: e.target.checked })}
+                    />
+                    Разрешить отмену заказов
+                  </label>
+                  <label className="flex items-center gap-2 mb-2 text-gray-900">
+                    <input
+                      type="checkbox"
+                      checked={editForm.can_create_transfers}
+                      onChange={(e) => setEditForm({ ...editForm, can_create_transfers: e.target.checked })}
+                    />
+                    Разрешить создание перемещений
+                  </label>
+                </>
               )}
               <div className="flex gap-2">
                 <button
@@ -324,6 +351,7 @@ export default function AdminUsersPage() {
                         city_id: p.city_id || '',
                         is_active: p.is_active ?? true,
                         can_cancel_orders: p.can_cancel_orders === true,
+                        can_create_transfers: p.can_create_transfers === true,
                       });
                     }}
                     className="px-3 py-1 bg-blue-600 text-white rounded text-sm"

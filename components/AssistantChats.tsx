@@ -7,8 +7,10 @@ import { runExclusive } from '@/lib/exclusiveAsync';
 import { displayChatNumber } from '@/lib/chatNumber';
 import AssistantMarkdown from '@/components/AssistantMarkdown';
 import AssistantOrderDraftCard from '@/components/AssistantOrderDraftCard';
+import AssistantTransferDraftCard from '@/components/AssistantTransferDraftCard';
 import AssistantCancelCard from '@/components/AssistantCancelCard';
 import type { AssistantDraftRow } from '@/lib/assistant/orderDraftTypes';
+import type { AssistantTransferDraftRow } from '@/lib/assistant/transferTypes';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
 import { resolveCancelCardState } from '@/lib/assistant/cancelCardState';
 import { readUserUi, writeUserUi } from '@/lib/uiStorage';
@@ -69,6 +71,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const [waitingAi, setWaitingAi] = useState(false);
   const [retry, setRetry] = useState<{ content: string; clientMessageId: string } | null>(null);
   const [drafts, setDrafts] = useState<AssistantDraftRow[]>([]);
+  const [transferDrafts, setTransferDrafts] = useState<AssistantTransferDraftRow[]>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -141,6 +144,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     if (!openId) {
       setMessages([]);
       setDrafts([]);
+      setTransferDrafts([]);
       return;
     }
     stickToBottomRef.current = true;
@@ -211,9 +215,22 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     if (err) {
       if (!/assistant_order_drafts|schema cache/i.test(err.message)) setError(err.message);
       else setDrafts([]);
+    } else {
+      setDrafts((data || []) as AssistantDraftRow[]);
+    }
+    const { data: transferData, error: transferErr } = await supabase
+      .from('assistant_stock_transfer_drafts')
+      .select(
+        'id, chat_id, owner_id, created_by, user_message_id, assistant_message_id, status, can_confirm, warnings, errors, preview, resolved, transfer_id, transfer_number'
+      )
+      .eq('chat_id', chatId)
+      .order('created_at', { ascending: true });
+    if (transferErr) {
+      if (!/assistant_stock_transfer_drafts|schema cache/i.test(transferErr.message)) setError(transferErr.message);
+      else setTransferDrafts([]);
       return;
     }
-    setDrafts((data || []) as AssistantDraftRow[]);
+    setTransferDrafts((transferData || []) as AssistantTransferDraftRow[]);
   }
 
   async function reloadMessages(chatId: string) {
@@ -305,6 +322,64 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
     setError('');
     setRetry(null);
+  }
+
+  async function assistantTransferAction(path: 'confirm' | 'cancel', draftId: string) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) {
+      setError('Сессия истекла. Войдите снова.');
+      return 'error' as const;
+    }
+    const res = await fetch(`/api/assistant/transfers/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ draftId }),
+    });
+    const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; pending?: boolean };
+    if (openId) {
+      await reloadMessages(openId);
+      await loadChats();
+    }
+    if (res.status === 202 || payload.pending) {
+      setError(payload.message || 'Отправка ещё обрабатывается. Повторите подтверждение.');
+      return 'pending' as const;
+    }
+    if (!res.ok || payload.ok === false) {
+      setError(payload.message || 'Не удалось выполнить действие с перемещением.');
+      return 'error' as const;
+    }
+    setError('');
+    return 'ok' as const;
+  }
+
+  async function confirmTransferDraft(draftId: string) {
+    if (readOnly || busy) return;
+    setBusy(true);
+    try {
+      await runExclusive(`assistant-transfer-confirm:${draftId}`, async () => {
+        const first = await assistantTransferAction('confirm', draftId);
+        if (first !== 'pending') return;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await assistantTransferAction('confirm', draftId);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelTransferDraft(draftId: string) {
+    if (readOnly || busy) return;
+    setBusy(true);
+    try {
+      await runExclusive(`assistant-transfer-cancel:${draftId}`, () => assistantTransferAction('cancel', draftId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function assistantOrderAction(path: 'confirm' | 'cancel', draftId: string) {
@@ -540,6 +615,14 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                             row.id === m.metadata?.draft_id
                         )
                       : undefined;
+                  const transferCard =
+                    !mine
+                      ? transferDrafts.find(
+                          (row) =>
+                            row.assistant_message_id === m.id ||
+                            row.id === m.metadata?.draft_id
+                        )
+                      : undefined;
                   return (
                     <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                       <div
@@ -559,6 +642,16 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                             busy={busy}
                             onConfirm={(id) => void confirmDraft(id)}
                             onCancel={(id) => void cancelDraft(id)}
+                            onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
+                          />
+                        ) : null}
+                        {transferCard ? (
+                          <AssistantTransferDraftCard
+                            draft={transferCard}
+                            readOnly={readOnly}
+                            busy={busy}
+                            onConfirm={(id) => void confirmTransferDraft(id)}
+                            onCancel={(id) => void cancelTransferDraft(id)}
                             onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
                           />
                         ) : null}

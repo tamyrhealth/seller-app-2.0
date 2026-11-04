@@ -10,10 +10,17 @@ import type { DraftResolved, DraftPreview, DraftIssue } from '@/lib/assistant/or
 import { parseCancelIntent } from '@/lib/assistant/cancelIntent';
 import { resolveCancelPreview } from '@/lib/assistant/resolveCancel';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
+import { parseTransferIntent } from '@/lib/assistant/transferIntent';
+import { resolveTransferDraft } from '@/lib/assistant/resolveTransfer';
+import type { TransferPreviewCard } from '@/lib/assistant/transferTypes';
 
 type HistoryRow = { role: string; content: string };
 
-export type AssistantActor = { role: string | null; can_cancel_orders: boolean };
+export type AssistantActor = {
+  role: string | null;
+  can_cancel_orders: boolean;
+  can_create_transfers: boolean;
+};
 
 export type TurnDraft = {
   id: string;
@@ -27,9 +34,21 @@ export type TurnDraft = {
   idempotency_key: string;
 };
 
+export type TurnTransferDraft = {
+  id: string;
+  status: 'preview' | 'blocked';
+  can_confirm: boolean;
+  warnings: TransferPreviewCard['warnings'];
+  errors: TransferPreviewCard['errors'];
+  resolved: TransferPreviewCard['resolved'];
+  preview: TransferPreviewCard['preview'];
+  idempotency_key: string;
+};
+
 export type AssistantTurn = {
   content: string;
   draft: TurnDraft | null;
+  transfer: TurnTransferDraft | null;
   cancel: CancelPreview | null;
 };
 
@@ -45,7 +64,23 @@ export async function generateAssistantTurn(
   const cancelIntent = parseCancelIntent(userText);
   if (cancelIntent) {
     const resolved = await resolveCancelPreview(db, cancelIntent.canonicalNumber || cancelIntent.orderQuery, actor);
-    return { content: resolved.content, draft: null, cancel: resolved.preview };
+    return { content: resolved.content, draft: null, transfer: null, cancel: resolved.preview };
+  }
+
+  const transferIntent = parseTransferIntent(userText);
+  if (transferIntent) {
+    const resolved = await resolveTransferDraft(db, transferIntent, actor);
+    const transfer: TurnTransferDraft = {
+      id: randomUUID(),
+      status: resolved.preview.can_confirm ? 'preview' : 'blocked',
+      can_confirm: resolved.preview.can_confirm,
+      warnings: resolved.preview.warnings,
+      errors: resolved.preview.errors,
+      resolved: resolved.preview.resolved,
+      preview: resolved.preview.preview,
+      idempotency_key: randomUUID(),
+    };
+    return { content: resolved.content, draft: null, transfer, cancel: null };
   }
 
   if (looksLikeInvoice(userText)) {
@@ -64,10 +99,10 @@ export async function generateAssistantTurn(
         customer_phone: resolved.resolved.is_debt ? phones[0] || null : null,
         idempotency_key: randomUUID(),
       };
-      return { content: buildDraftChatMessage(resolved), draft, cancel: null };
+      return { content: buildDraftChatMessage(resolved), draft, transfer: null, cancel: null };
     }
   }
   if (remaining() < 2000) throw new Error('timed out');
   const content = await generateAssistantReply(db, history, userText);
-  return { content, draft: null, cancel: null };
+  return { content, draft: null, transfer: null, cancel: null };
 }

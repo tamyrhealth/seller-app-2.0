@@ -95,7 +95,12 @@ export function mapTransferRpcError(message: string): string {
   if (message.includes('Received qty exceeds sent qty')) {
     return 'Полученное количество не может быть больше отправленного';
   }
-  if (message.includes('Only admin')) return 'Только администратор может управлять перемещениями';
+  if (message.includes('Only admin') || message.includes('Transfer permission denied')) {
+    return 'Только администратор может управлять перемещениями';
+  }
+  if (message.includes('Source city is inactive')) return 'Город отправления неактивен';
+  if (message.includes('Destination city is inactive')) return 'Город получения неактивен';
+  if (message.includes('Inactive product')) return 'Товар неактивен';
   if (message.includes('No items')) return 'Добавьте хотя бы один товар';
   if (message.includes('Invalid qty')) return 'Введите корректное количество';
   return message;

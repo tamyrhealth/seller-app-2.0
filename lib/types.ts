@@ -14,6 +14,7 @@ export type Profile = {
   city_id: string | null;
   is_active?: boolean;
   can_cancel_orders?: boolean;
+  can_create_transfers?: boolean;
 };
 
 export type PaymentType = 'cash' | 'kaspi' | 'card' | 'transfer' | 'debt';
