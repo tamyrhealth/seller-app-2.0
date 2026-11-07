@@ -1,10 +1,20 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import type { AssistantDraftRow, DraftCandidate, DraftItemResolved } from '@/lib/assistant/orderDraftTypes';
 import type { PaymentType } from '@/lib/types';
 import DraftProductPicker from '@/components/DraftProductPicker';
+import SimilarOrdersWarning from '@/components/SimilarOrdersWarning';
+import {
+  lookupSimilarOrders,
+  similarCompositionKey,
+  similarMatchIds,
+  similarMatchesAcknowledged,
+  type SimilarAck,
+  type SimilarOrderMatch,
+} from '@/lib/similarOrders';
+import { useAuth } from '@/lib/auth';
 
 function money(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -47,9 +57,13 @@ type Props = {
   draft: AssistantDraftRow;
   readOnly: boolean;
   busy: boolean;
-  onConfirm: (id: string) => void;
+  onConfirm: (
+    id: string,
+    opts?: { acknowledgedSimilarIds?: string[]; acknowledgedComposition?: string }
+  ) => void;
   onCancel: (id: string) => void;
   onUpdated: () => Promise<void> | void;
+  serverSimilarMatches?: SimilarOrderMatch[];
 };
 
 function totalReady(draft: AssistantDraftRow) {
@@ -82,7 +96,15 @@ function seedLines(draft: AssistantDraftRow): EditLine[] {
   }));
 }
 
-export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfirm, onCancel, onUpdated }: Props) {
+export default function AssistantOrderDraftCard({
+  draft,
+  readOnly,
+  busy,
+  onConfirm,
+  onCancel,
+  onUpdated,
+  serverSimilarMatches = [],
+}: Props) {
   const preview = draft.preview || {
     seller_name: null,
     city_name: null,
@@ -117,6 +139,10 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
   const [invoiceTime, setInvoiceTime] = useState(draft.resolved?.invoice_time || preview.invoice_time || '');
   const [pickupDate, setPickupDate] = useState(draft.resolved?.pickup_date || preview.pickup_date || '');
   const [lines, setLines] = useState<EditLine[]>(() => seedLines(draft));
+  const { profile } = useAuth();
+  const [similarWarning, setSimilarWarning] = useState<SimilarOrderMatch[]>([]);
+  const [similarAck, setSimilarAck] = useState<SimilarAck | null>(null);
+  const [similarChecking, setSimilarChecking] = useState(false);
 
   const selectedSeller = catalog?.sellers.find((s) => s.id === sellerId) || null;
   const sellerCities = useMemo(() => {
@@ -124,6 +150,77 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
     if (!selectedSeller) return catalog.cities;
     return catalog.cities.filter((c) => c.id === selectedSeller.city_id);
   }, [catalog, selectedSeller]);
+
+  const shownSimilar = similarWarning.length > 0 ? similarWarning : serverSimilarMatches;
+  const draftComposition = similarCompositionKey({
+    sellerId: draft.resolved?.seller_id || '',
+    cityId: draft.resolved?.city_id || '',
+    customerPhone: draft.customer_phone || null,
+    items: (draft.resolved?.items || [])
+      .filter((item) => item.product_id && Number(item.qty) > 0)
+      .map((item) => ({
+        product_id: String(item.product_id),
+        qty: Number(item.qty),
+        is_gift: item.is_gift === true,
+      })),
+  });
+
+  useEffect(() => {
+    setSimilarWarning([]);
+    setSimilarAck(null);
+  }, [draftComposition]);
+
+  async function requestConfirm(ackOverride?: SimilarAck | null) {
+    const seller = draft.resolved?.seller_id || '';
+    const city = draft.resolved?.city_id || '';
+    const items = (draft.resolved?.items || [])
+      .filter((item) => item.product_id && Number(item.qty) > 0)
+      .map((item) => ({
+        product_id: String(item.product_id),
+        qty: Number(item.qty),
+        is_gift: item.is_gift === true,
+      }));
+    if (!seller || !city || items.length === 0) {
+      setLocalError('Нельзя проверить похожие заказы: нет продавца, города или товаров.');
+      return;
+    }
+    setSimilarChecking(true);
+    setLocalError('');
+    try {
+      const composition = similarCompositionKey({
+        sellerId: seller,
+        cityId: city,
+        customerPhone: draft.customer_phone || null,
+        items,
+      });
+      const similar = await lookupSimilarOrders(supabase, {
+        sellerId: seller,
+        cityId: city,
+        items,
+        customerPhone: draft.customer_phone || null,
+        excludeIdempotencyKey: draft.idempotency_key || null,
+      });
+      if (!similar.ok) {
+        setLocalError(similar.error);
+        return;
+      }
+      const ack = ackOverride === undefined ? similarAck : ackOverride;
+      if (
+        similar.result.matches.length > 0 &&
+        !similarMatchesAcknowledged(ack, composition, similar.result.matches)
+      ) {
+        setSimilarWarning(similar.result.matches);
+        return;
+      }
+      setSimilarWarning([]);
+      onConfirm(draft.id, {
+        acknowledgedSimilarIds: similarMatchIds(similar.result.matches),
+        acknowledgedComposition: composition,
+      });
+    } finally {
+      setSimilarChecking(false);
+    }
+  }
 
   async function token() {
     const { data } = await supabase.auth.getSession();
@@ -520,12 +617,43 @@ export default function AssistantOrderDraftCard({ draft, readOnly, busy, onConfi
           ))}
         </ul>
       ) : null}
+      {shownSimilar.length > 0 ? (
+        <div className="mt-3">
+          <SimilarOrdersWarning
+            matches={shownSimilar}
+            role={profile?.role}
+            continueBusy={busy || similarChecking}
+            onContinue={() => {
+              const seller = draft.resolved?.seller_id || '';
+              const city = draft.resolved?.city_id || '';
+              const items = (draft.resolved?.items || [])
+                .filter((item) => item.product_id && Number(item.qty) > 0)
+                .map((item) => ({
+                  product_id: String(item.product_id),
+                  qty: Number(item.qty),
+                  is_gift: item.is_gift === true,
+                }));
+              const nextAck: SimilarAck = {
+                composition: similarCompositionKey({
+                  sellerId: seller,
+                  cityId: city,
+                  customerPhone: draft.customer_phone || null,
+                  items,
+                }),
+                matchIds: similarMatchIds(shownSimilar),
+              };
+              setSimilarAck(nextAck);
+              void requestConfirm(nextAck);
+            }}
+          />
+        </div>
+      ) : null}
       {!readOnly && !done && draft.status !== 'cancelled' ? (
         <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <button
             type="button"
-            disabled={busy || blocked || editing || pending}
-            onClick={() => onConfirm(draft.id)}
+            disabled={busy || blocked || editing || pending || similarChecking}
+            onClick={() => void requestConfirm()}
             className="px-3 py-2 rounded-lg bg-green-600 text-white disabled:opacity-50"
           >
             Подтвердить заказ

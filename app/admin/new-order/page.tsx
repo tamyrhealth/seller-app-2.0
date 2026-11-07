@@ -13,12 +13,22 @@ import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import {
   buildClientOrderFingerprint,
+  peekOrderIdempotencyKey,
   invalidateOrderIdempotencyKey,
   releaseConfirmedOrderAttempt,
   runConfirmOrderOnce,
 } from '@/lib/orderIdempotency';
 import type { Product, PaymentType } from '@/lib/types';
 import { clearOrderFormDraft, useOrderFormDraft, type OrderFormDraft } from '@/lib/orderFormDraft';
+import SimilarOrdersWarning from '@/components/SimilarOrdersWarning';
+import {
+  lookupSimilarOrders,
+  similarCompositionKey,
+  similarMatchIds,
+  similarMatchesAcknowledged,
+  type SimilarAck,
+  type SimilarOrderMatch,
+} from '@/lib/similarOrders';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -80,6 +90,8 @@ export default function AdminNewOrderPage() {
   const [submitting, setSubmitting] = useState(false);
   const submitGate = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [similarWarning, setSimilarWarning] = useState<SimilarOrderMatch[]>([]);
+  const [similarAck, setSimilarAck] = useState<SimilarAck | null>(null);
   const [sellers, setSellers] = useState<SellerOption[]>([]);
   const [selectedSellerId, setSelectedSellerId] = useState('');
   const [sellersLoading, setSellersLoading] = useState(true);
@@ -309,7 +321,12 @@ export default function AdminNewOrderPage() {
     }
   }, [cart.length, profile?.id]);
 
-  async function handleConfirm() {
+  useEffect(() => {
+    setSimilarWarning([]);
+    setSimilarAck(null);
+  }, [cart, cityId, selectedSellerId, debtCustomerPhone, orderType]);
+
+  async function handleConfirm(ackOverride?: SimilarAck | null) {
     if (submitGate.current || submitting) return;
     if (!canSubmit || !profile?.id || !selectedSeller?.id || !cityId) return;
     submitGate.current = true;
@@ -392,6 +409,32 @@ export default function AdminNewOrderPage() {
         debtNote: debtNoteVal,
         items,
       });
+      const composition = similarCompositionKey({
+        sellerId: selectedSeller.id,
+        cityId,
+        customerPhone: isDebtToggle ? phone : null,
+        items,
+      });
+      const similar = await lookupSimilarOrders(supabase, {
+        sellerId: selectedSeller.id,
+        cityId,
+        items,
+        customerPhone: isDebtToggle ? phone : null,
+        excludeIdempotencyKey: peekOrderIdempotencyKey(profile.id, fingerprint),
+      });
+      if (!similar.ok) {
+        setError(similar.error);
+        return;
+      }
+      const ack = ackOverride === undefined ? similarAck : ackOverride;
+      if (
+        similar.result.matches.length > 0 &&
+        !similarMatchesAcknowledged(ack, composition, similar.result.matches)
+      ) {
+        setSimilarWarning(similar.result.matches);
+        return;
+      }
+      setSimilarWarning([]);
       const orderId = await runConfirmOrderOnce(profile.id, fingerprint, async (idempotencyKey) => {
         payload.idempotency_key = idempotencyKey;
         const { data, error: rpcError } = await supabase.rpc('confirm_order', {
@@ -740,10 +783,31 @@ export default function AdminNewOrderPage() {
                   />
                 </div>
               )}
-              <div className="sticky bottom-20 left-0 right-0 z-30 bg-white border-t border-gray-200 py-3 -mx-3 px-3 md:static md:border-0 md:py-0 md:mx-0">
+              <div className="sticky bottom-20 left-0 right-0 z-30 bg-white border-t border-gray-200 py-3 -mx-3 px-3 md:static md:border-0 md:py-0 md:mx-0 space-y-2">
+                {similarWarning.length > 0 ? (
+                  <SimilarOrdersWarning
+                    matches={similarWarning}
+                    role={profile?.role}
+                    continueBusy={submitting}
+                    onContinue={() => {
+                      if (!selectedSeller?.id || !cityId) return;
+                      const nextAck: SimilarAck = {
+                        composition: similarCompositionKey({
+                          sellerId: selectedSeller.id,
+                          cityId,
+                          customerPhone: orderType === 'debt' ? debtCustomerPhone : null,
+                          items: cart.map((item) => ({ product_id: item.product_id, qty: item.qty ?? 0 })),
+                        }),
+                        matchIds: similarMatchIds(similarWarning),
+                      };
+                      setSimilarAck(nextAck);
+                      void handleConfirm(nextAck);
+                    }}
+                  />
+                ) : null}
                 <button
                   type="button"
-                  onClick={handleConfirm}
+                  onClick={() => void handleConfirm()}
                   disabled={!canSubmit || submitting}
                   className="w-full max-w-full py-3 bg-green-600 text-white font-bold rounded-xl disabled:opacity-50 min-h-[52px] text-base"
                 >

@@ -217,6 +217,15 @@ export function getTabOrderIdempotencySnapshot(): Op | null {
   return readTabOp();
 }
 
+/** Read an existing key for this fingerprint. Does not create a pending attempt. */
+export function peekOrderIdempotencyKey(userId: string, fingerprint: string): string | null {
+  const op = readTabOp();
+  if (op?.key && op.userId === userId && op.fingerprint === fingerprint) return op.key;
+  const shared = readStore().sharedPending;
+  if (shared?.key && shared.userId === userId && shared.fingerprint === fingerprint) return shared.key;
+  return null;
+}
+
 /**
  * One user-facing confirm = one promise and one key.
  * Overlapping clicks join the in-flight call.

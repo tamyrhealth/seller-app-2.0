@@ -3,6 +3,7 @@ import {
   buildClientOrderFingerprint,
   getOrCreateOrderIdempotencyKey,
   getTabOrderIdempotencySnapshot,
+  peekOrderIdempotencyKey,
   invalidateOrderIdempotencyKey,
   markOrderIdempotencyConfirmed,
   releaseConfirmedOrderAttempt,
@@ -106,7 +107,10 @@ if (fp1 === fpActor) fail('actor must be part of fingerprint');
 const tabA = makeStorage();
 const tabB = makeStorage();
 installTab(tabA);
+if (peekOrderIdempotencyKey('user-a', fp1) !== null) fail('peek must not create a key');
 const k1 = getOrCreateOrderIdempotencyKey('user-a', fp1);
+if (peekOrderIdempotencyKey('user-a', fp1) !== k1) fail('peek must read existing key');
+if (peekOrderIdempotencyKey('user-a', fpComment) !== null) fail('peek must ignore other fingerprint');
 const k1b = getOrCreateOrderIdempotencyKey('user-a', fp1);
 if (k1 !== k1b) fail('pending retry in same tab must reuse key');
 

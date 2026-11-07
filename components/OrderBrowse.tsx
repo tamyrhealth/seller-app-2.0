@@ -80,6 +80,16 @@ export default function OrderBrowse() {
   );
 
   useEffect(() => {
+    const syncFromUrl = () => {
+      const p = new URLSearchParams(window.location.search);
+      setSelectedId(p.get('id'));
+    };
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
+
+  useEffect(() => {
     supabase.from('cities').select('id, name, is_active').order('name').then(({ data }) => setCities(data || []));
     supabase
       .from('profiles')

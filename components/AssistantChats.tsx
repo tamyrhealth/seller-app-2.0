@@ -11,6 +11,11 @@ import AssistantTransferDraftCard from '@/components/AssistantTransferDraftCard'
 import AssistantCancelCard from '@/components/AssistantCancelCard';
 import AssistantTransferManageCard from '@/components/AssistantTransferManageCard';
 import type { AssistantDraftRow } from '@/lib/assistant/orderDraftTypes';
+import {
+  displaySimilarOrderNumber,
+  formatSimilarLookupError,
+  type SimilarOrderMatch,
+} from '@/lib/similarOrders';
 import type { AssistantTransferDraftRow } from '@/lib/assistant/transferTypes';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
 import type { TransferManagePreview } from '@/lib/assistant/transferManageTypes';
@@ -79,6 +84,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const [waitingAi, setWaitingAi] = useState(false);
   const [retry, setRetry] = useState<{ content: string; clientMessageId: string } | null>(null);
   const [drafts, setDrafts] = useState<AssistantDraftRow[]>([]);
+  const [similarByDraft, setSimilarByDraft] = useState<Record<string, SimilarOrderMatch[]>>({});
   const [transferDrafts, setTransferDrafts] = useState<AssistantTransferDraftRow[]>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -243,7 +249,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     const { data, error: err } = await supabase
       .from('assistant_order_drafts')
       .select(
-        'id, chat_id, owner_id, created_by, user_message_id, assistant_message_id, status, can_confirm, warnings, errors, preview, resolved, order_id, order_number, confirmed_by, confirmed_at'
+        'id, chat_id, owner_id, created_by, user_message_id, assistant_message_id, status, can_confirm, warnings, errors, preview, resolved, customer_phone, idempotency_key, order_id, order_number, confirmed_by, confirmed_at'
       )
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
@@ -450,7 +456,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
   }
 
-  async function assistantOrderAction(path: 'confirm' | 'cancel', draftId: string) {
+  async function assistantOrderAction(
+    path: 'confirm' | 'cancel',
+    draftId: string,
+    extra?: { acknowledgedSimilarIds?: string[]; acknowledgedComposition?: string }
+  ) {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
     if (!token) {
@@ -460,9 +470,19 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     const res = await fetch(`/api/assistant/orders/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ draftId }),
+      body: JSON.stringify({
+        draftId,
+        acknowledged_similar_ids: extra?.acknowledgedSimilarIds || [],
+        acknowledged_similar_composition: extra?.acknowledgedComposition || '',
+      }),
     });
-    const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; pending?: boolean };
+    const payload = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      message?: string;
+      pending?: boolean;
+      code?: string;
+      matches?: SimilarOrderMatch[];
+    };
     if (openId) {
       await reloadMessages(openId);
       await loadChats();
@@ -471,23 +491,45 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
       setError(payload.message || 'Заказ ещё обрабатывается. Повторите подтверждение.');
       return 'pending' as const;
     }
+    if (res.status === 409 && payload.code === 'similar_orders') {
+      const matches = Array.isArray(payload.matches) ? payload.matches : [];
+      setSimilarByDraft((prev) => ({ ...prev, [draftId]: matches }));
+      const numbers = matches.map(displaySimilarOrderNumber).join(', ');
+      setError(
+        payload.message ||
+          `Похожий заказ уже есть: ${numbers || 'без номера'}. Откройте существующий или нажмите «Это другой заказ — продолжить».`
+      );
+      return 'similar' as const;
+    }
+    if (res.status === 503 && payload.code === 'sql_missing') {
+      setError(payload.message || formatSimilarLookupError(payload.message));
+      return 'error' as const;
+    }
     if (!res.ok || payload.ok === false) {
       setError(payload.message || 'Не удалось выполнить действие с заказом.');
       return 'error' as const;
     }
     setError('');
+    setSimilarByDraft((prev) => {
+      const next = { ...prev };
+      delete next[draftId];
+      return next;
+    });
     return 'ok' as const;
   }
 
-  async function confirmDraft(draftId: string) {
+  async function confirmDraft(
+    draftId: string,
+    opts?: { acknowledgedSimilarIds?: string[]; acknowledgedComposition?: string }
+  ) {
     if (readOnly || busy) return;
     setBusy(true);
     try {
       await runExclusive(`assistant-order-confirm:${draftId}`, async () => {
-        const first = await assistantOrderAction('confirm', draftId);
+        const first = await assistantOrderAction('confirm', draftId, opts);
         if (first !== 'pending') return;
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        await assistantOrderAction('confirm', draftId);
+        await assistantOrderAction('confirm', draftId, opts);
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сеть недоступна.');
@@ -727,9 +769,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               draft={card}
                               readOnly={readOnly}
                               busy={busy}
-                              onConfirm={(id) => void confirmDraft(id)}
+                              onConfirm={(id, opts) => void confirmDraft(id, opts)}
                               onCancel={(id) => void cancelDraft(id)}
                               onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
+                              serverSimilarMatches={similarByDraft[card.id] || []}
                             />
                           ) : null}
                           {transferCard ? (

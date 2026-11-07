@@ -4,6 +4,13 @@ import { createServiceClient, createUserClient, readBearerToken } from '@/lib/as
 import { revalidateResolved } from '@/lib/assistant/resolveOrder';
 import type { DraftResolved } from '@/lib/assistant/orderDraftTypes';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  formatSimilarLookupError,
+  parseSimilarOrdersResult,
+  similarCompositionKey,
+  similarMatchesAcknowledged,
+  SIMILAR_SQL_HINT,
+} from '@/lib/similarOrders';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -147,7 +154,14 @@ export async function POST(req: Request) {
   const token = readBearerToken(req);
   if (!token) return jsonError(401, 'unauthorized', 'Нужна авторизация.');
 
-  let body: { draftId?: string; seller_id?: unknown; city_id?: unknown; total_sum?: unknown };
+  let body: {
+    draftId?: string;
+    seller_id?: unknown;
+    city_id?: unknown;
+    total_sum?: unknown;
+    acknowledged_similar_ids?: unknown;
+    acknowledged_similar_composition?: unknown;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -222,7 +236,109 @@ export async function POST(req: Request) {
   try {
     check = await revalidateResolved(userDb, live.resolved, live.customer_phone);
   } catch (err) {
+    await service.rpc('fail_assistant_order_confirm', {
+      p_id: draftId,
+      p_owner_id: user.id,
+      p_errors: [{ code: 'revalidate_failed', message: err instanceof Error ? err.message : 'revalidate_failed' }],
+      p_can_confirm: live.can_confirm,
+    });
     return jsonError(500, 'revalidate_failed', err instanceof Error ? err.message : 'revalidate_failed', true);
+  }
+
+  const ackIds = Array.isArray(body.acknowledged_similar_ids)
+    ? body.acknowledged_similar_ids.filter((id): id is string => typeof id === 'string' && UUID_RE.test(id))
+    : [];
+  const ackComposition =
+    typeof body.acknowledged_similar_composition === 'string' ? body.acknowledged_similar_composition : '';
+
+  const similarItems = (check.payload?.items || []) as Array<{
+    product_id?: string;
+    qty?: number;
+    is_gift?: boolean;
+  }>;
+  const similarSeller = String(check.payload?.seller_id || live.resolved?.seller_id || '');
+  const similarCity = String(check.payload?.city_id || live.resolved?.city_id || '');
+  const similarPhone =
+    (typeof check.payload?.debt_customer_phone === 'string' && check.payload.debt_customer_phone) ||
+    live.customer_phone ||
+    null;
+
+  if (check.ok && check.payload && similarSeller && similarCity && similarItems.length > 0) {
+    const { data: similarRaw, error: similarErr } = await userDb.rpc('find_similar_orders', {
+      p: {
+        seller_id: similarSeller,
+        city_id: similarCity,
+        items: similarItems,
+        customer_phone: similarPhone,
+        exclude_idempotency_key: String(live.idempotency_key || ''),
+      },
+    });
+    if (similarErr) {
+      const recovered = await recoverCreatedOrder(userDb, service, user.id, live);
+      if (recovered) return recovered;
+      await service.rpc('fail_assistant_order_confirm', {
+        p_id: draftId,
+        p_owner_id: user.id,
+        p_errors: [{ code: 'similar_lookup_failed', message: similarErr.message }],
+        p_can_confirm: true,
+      });
+      const sqlMissing = /find_similar_orders|schema cache|does not exist/i.test(similarErr.message);
+      return jsonError(
+        sqlMissing ? 503 : 400,
+        sqlMissing ? 'sql_missing' : 'similar_lookup_failed',
+        sqlMissing ? SIMILAR_SQL_HINT : formatSimilarLookupError(similarErr.message),
+        true
+      );
+    }
+    const similar = parseSimilarOrdersResult(similarRaw);
+    const liveComposition = similarCompositionKey({
+      sellerId: similarSeller,
+      cityId: similarCity,
+      customerPhone: similarPhone,
+      items: similarItems.map((item) => ({
+        product_id: String(item.product_id || ''),
+        qty: Number(item.qty || 0),
+        is_gift: item.is_gift === true,
+      })),
+    });
+    if (
+      similar.matches.length > 0 &&
+      !similarMatchesAcknowledged(
+        { composition: ackComposition, matchIds: ackIds },
+        liveComposition,
+        similar.matches
+      )
+    ) {
+      const recovered = await recoverCreatedOrder(userDb, service, user.id, live);
+      if (recovered) return recovered;
+      await service.rpc('fail_assistant_order_confirm', {
+        p_id: draftId,
+        p_owner_id: user.id,
+        p_errors: [],
+        p_can_confirm: true,
+      });
+      const numbers = similar.matches
+        .map((m) => m.order_number || m.order_id.slice(0, 8))
+        .join(', ');
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'similar_orders',
+          message: `Похожий заказ уже есть: ${numbers}. Откройте существующий или нажмите «Это другой заказ — продолжить».`,
+          matches: similar.matches,
+          retryable: false,
+        },
+        { status: 409 }
+      );
+    }
+  } else if (check.ok && check.payload) {
+    await service.rpc('fail_assistant_order_confirm', {
+      p_id: draftId,
+      p_owner_id: user.id,
+      p_errors: [{ code: 'similar_lookup_failed', message: 'missing similar lookup fields' }],
+      p_can_confirm: true,
+    });
+    return jsonError(400, 'similar_lookup_failed', 'Нельзя проверить похожие заказы: нет продавца, города или товаров.');
   }
 
   if (!check.ok || !check.payload) {

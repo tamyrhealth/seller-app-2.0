@@ -79,6 +79,8 @@ export type AssistantDraftRow = {
   errors: DraftIssue[];
   preview: DraftPreview;
   resolved?: DraftResolved;
+  customer_phone?: string | null;
+  idempotency_key?: string | null;
   order_id: string | null;
   order_number: string | null;
   confirmed_by: string | null;
