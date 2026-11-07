@@ -4,6 +4,12 @@ import { actorCanCreateTransfer, actorCanManageTransfers } from '../lib/assistan
 import { parseCancelIntent } from '../lib/assistant/cancelIntent';
 import { parseTransferIntent } from '../lib/assistant/transferIntent';
 import { parseTransferManageIntent, parseTransferNumberQuery } from '../lib/assistant/transferManageIntent';
+import {
+  buildTransferManageMessage,
+  collectTransferManageActionErrors,
+  filterTransferManageList,
+} from '../lib/assistant/resolveTransferManage';
+import type { TransferManagePreview } from '../lib/assistant/transferManageTypes';
 import { isAssistantRole } from '../lib/roles';
 
 function fail(msg: string): never {
@@ -31,7 +37,113 @@ if (parseTransferManageIntent('Недостача T000005 причина: бой
 if (parseTransferManageIntent('Недостача T000005 причина: бой')?.reason !== 'бой') fail('shortage reason');
 if (parseTransferManageIntent('Статус T000005')?.kind !== 'lookup') fail('lookup intent');
 if (parseTransferManageIntent('Покажи перемещения')?.kind !== 'list') fail('list intent');
+if (parseTransferManageIntent('Покажи перемещения')?.listFilter !== 'all') fail('generic list stays unfiltered');
+const awaiting = parseTransferManageIntent('Покажи мои перемещения, которые ожидают приёмки');
+if (awaiting?.kind !== 'list') fail('awaiting receipt is a list intent');
+if (awaiting?.listFilter !== 'in_transit') fail('awaiting receipt must request in-transit only');
+if (awaiting?.mineOnly !== true) fail('awaiting my transfers must set mineOnly');
+const previewReceive = parseTransferManageIntent(
+  'Хочу принять перемещение T000006. Покажи товары и количество для подтверждения, но пока ничего не проводи'
+);
+if (previewReceive?.kind !== 'receive') fail('preview receive still receive kind');
+if (previewReceive?.transferNumber !== 'T000006') fail('preview receive number');
+if (previewReceive?.previewOnly !== true) fail('do not confirm informational receive');
+if (parseTransferManageIntent('Прими T000005')?.previewOnly) fail('real receive must still confirm');
 if (parseTransferManageIntent('Алматы → Актау\n1 порошок')) fail('create must not be manage');
+
+const closedAndOpen = [
+  {
+    transfer_number: 'T000001',
+    from_city_name: 'A',
+    to_city_name: 'B',
+    status: 'Получено',
+    remaining: 0,
+    created_by: 'me',
+  },
+  {
+    transfer_number: 'T000002',
+    from_city_name: 'A',
+    to_city_name: 'B',
+    status: 'В пути',
+    remaining: 4,
+    created_by: 'me',
+  },
+  {
+    transfer_number: 'T000003',
+    from_city_name: 'A',
+    to_city_name: 'B',
+    status: 'Закрыто с недостачей',
+    remaining: 0,
+    created_by: 'me',
+  },
+  {
+    transfer_number: 'T000004',
+    from_city_name: 'A',
+    to_city_name: 'B',
+    status: 'В пути',
+    remaining: 2,
+    created_by: 'other',
+  },
+];
+const mineWaiting = filterTransferManageList(closedAndOpen, { inTransit: true, mineOnly: true, actorId: 'me' });
+if (mineWaiting.map((r) => r.transfer_number).join() !== 'T000002') fail('list must keep only my remaining > 0');
+if (filterTransferManageList(closedAndOpen, { inTransit: true, mineOnly: true, actorId: 'nobody' }).length) {
+  fail('empty in-transit list for current user');
+}
+const emptyListPreview: TransferManagePreview = {
+  kind: 'list',
+  can_confirm: false,
+  transfer_id: null,
+  transfer_number: null,
+  from_city_name: null,
+  to_city_name: null,
+  status: null,
+  created_by_name: null,
+  created_at: null,
+  remaining: 0,
+  items: [],
+  events: [],
+  list: [],
+  empty_list_message: 'Нет ваших перемещений, ожидающих приёмки.',
+  reason: null,
+  errors: [],
+  operation_id: 'op',
+};
+const emptyListMsg = buildTransferManageMessage(emptyListPreview);
+if (!emptyListMsg.includes('Нет ваших перемещений, ожидающих приёмки.')) fail('empty in-transit copy');
+if (/T000/.test(emptyListMsg)) fail('empty list must not show closed transfers');
+
+const closedReceiveErrs = collectTransferManageActionErrors({
+  kind: 'receive',
+  remaining: 0,
+  items: [{ name: 'Товар', action_qty: 0, remaining: 0 }],
+  reason: null,
+});
+if (closedReceiveErrs.some((e) => e.code === 'items_missing')) fail('closed receive must not ask for qty');
+if (closedReceiveErrs.map((e) => e.code).join() !== 'nothing_remaining') fail('closed receive only remaining error');
+const closedShortageErrs = collectTransferManageActionErrors({
+  kind: 'shortage',
+  remaining: 0,
+  items: [{ name: 'Товар', action_qty: 0, remaining: 0 }],
+  reason: '',
+});
+if (closedShortageErrs.some((e) => e.code === 'reason_required' || e.code === 'items_missing')) {
+  fail('closed shortage must not require qty or reason after remaining check');
+}
+const openReceiveErrs = collectTransferManageActionErrors({
+  kind: 'receive',
+  remaining: 4,
+  items: [{ name: 'Товар', action_qty: 4, remaining: 4 }],
+  reason: null,
+});
+if (openReceiveErrs.length) fail('open receive with qty must stay confirmable');
+const missingQtyErrs = collectTransferManageActionErrors({
+  kind: 'receive',
+  remaining: 4,
+  items: [{ name: 'Товар', action_qty: 0, remaining: 4 }],
+  reason: null,
+});
+if (!missingQtyErrs.some((e) => e.code === 'items_missing')) fail('open receive still requires qty when none given');
 if (parseTransferIntent('Прими T000005')) fail('create parser must ignore receive');
 if (parseCancelIntent('Отмени перемещение T000005')) fail('order cancel must ignore transfer cancel');
 if (!parseCancelIntent('Отмени заказ N000033')) fail('order cancel still works');
@@ -44,6 +156,7 @@ const origReceive = read('supabase/migrations/20261103230000_stock_transfer_part
 const origWrite = read('supabase/migrations/20261103240000_product_cost_shortage_snapshot.sql');
 const create525 = read('supabase/migrations/20261104220000_assistant_stock_transfers.sql');
 const handle = read('lib/assistant/handleTurn.ts');
+const resolveSrc = read('lib/assistant/resolveTransferManage.ts');
 const chat = read('app/api/assistant/chat/route.ts');
 const manage = read('app/api/assistant/transfers/manage/route.ts');
 const card = read('components/AssistantTransferManageCard.tsx');
@@ -125,5 +238,12 @@ if (!users.includes('can_manage_transfers')) fail('users UI flag');
 if (!users.includes('Разрешить полное управление перемещениями')) fail('users checkbox copy');
 if (panel.includes('can_manage_transfers')) fail('TransfersPanel must not grow manager flags');
 if (!panel.includes('dup ? `${name} · ${short}`')) fail('admin history must distinguish duplicate display names');
+if (!handle.includes('id: actor.id || null')) fail('manage resolver must receive current user id');
+if (!chat.includes('id: user.id')) fail('chat must pass user id for my-transfers filter');
+if (!resolveSrc.includes('intent.listFilter === \'in_transit\'') && !resolveSrc.includes('intent.listFilter === "in_transit"')) {
+  fail('list must honor in-transit filter');
+}
+if (!resolveSrc.includes('!intent.previewOnly')) fail('informational receive must not set can_confirm');
+if (!resolveSrc.includes('remaining > 0')) fail('can_confirm requires remaining in transit');
 
 console.log('check-assistant-transfer-manage: ok');

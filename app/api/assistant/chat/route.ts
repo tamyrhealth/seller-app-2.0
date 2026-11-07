@@ -182,6 +182,7 @@ export async function POST(req: Request) {
     const withoutCurrent =
       last?.role === 'user' && last.content === storedContent ? rows.slice(0, -1) : rows;
     const turn = await generateAssistantTurn(userDb, withoutCurrent, storedContent, {
+      id: user.id,
       role: profile.role as string,
       can_cancel_orders: profile.can_cancel_orders === true,
       can_create_transfers: (profile as { can_create_transfers?: boolean }).can_create_transfers === true,

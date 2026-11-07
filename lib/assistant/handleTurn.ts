@@ -20,6 +20,7 @@ import type { TransferManagePreview } from '@/lib/assistant/transferManageTypes'
 type HistoryRow = { role: string; content: string };
 
 export type AssistantActor = {
+  id?: string | null;
   role: string | null;
   can_cancel_orders: boolean;
   can_create_transfers: boolean;
@@ -69,6 +70,7 @@ export async function generateAssistantTurn(
   const transferManageIntent = parseTransferManageIntent(userText);
   if (transferManageIntent) {
     const resolved = await resolveTransferManage(db, transferManageIntent, {
+      id: actor.id || null,
       role: actor.role,
       can_manage_transfers: actor.can_manage_transfers === true,
     });

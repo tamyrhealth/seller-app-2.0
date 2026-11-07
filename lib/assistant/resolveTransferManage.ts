@@ -11,7 +11,58 @@ import type {
 } from '@/lib/assistant/transferManageTypes';
 import { transferDisplayStatus, transferLineQtys, transferRemaining } from '@/lib/stockTransfer';
 
-type Actor = { role: string | null; can_manage_transfers: boolean };
+type Actor = { id?: string | null; role: string | null; can_manage_transfers: boolean };
+
+export type TransferManageListRow = {
+  transfer_number: string;
+  from_city_name: string;
+  to_city_name: string;
+  status: string;
+  remaining: number;
+  created_by?: string | null;
+};
+
+export function filterTransferManageList(
+  rows: TransferManageListRow[],
+  opts: { inTransit: boolean; mineOnly: boolean; actorId: string | null }
+): TransferManageListRow[] {
+  return rows.filter((row) => {
+    if (opts.inTransit && !(row.remaining > 0)) return false;
+    if (opts.mineOnly && opts.actorId && row.created_by !== opts.actorId) return false;
+    return true;
+  });
+}
+
+export function collectTransferManageActionErrors(args: {
+  kind: TransferManagePreview['kind'];
+  remaining: number;
+  items: Array<{ name: string; action_qty: number; remaining: number }>;
+  reason: string | null;
+}): TransferManageIssue[] {
+  const errors: TransferManageIssue[] = [];
+  if (args.kind !== 'receive' && args.kind !== 'return_remainder' && args.kind !== 'shortage') {
+    return errors;
+  }
+  if (args.remaining <= 0) {
+    errors.push(issue('nothing_remaining', 'В пути ничего не осталось. Повторно вернуть или принять нельзя.'));
+    return errors;
+  }
+  for (const line of args.items) {
+    if (line.action_qty < 0) errors.push(issue('qty_invalid', `${line.name}: некорректное количество.`));
+    if (line.action_qty > line.remaining) {
+      errors.push(issue('qty_exceeds', `${line.name}: нужно не больше остатка в пути ${line.remaining}.`));
+    }
+  }
+  if (args.kind === 'receive' && !args.items.some((i) => i.action_qty > 0)) {
+    errors.push(issue('items_missing', 'Укажите количество к приёмке.'));
+  }
+  if (args.kind === 'shortage') {
+    const reason = (args.reason || '').trim();
+    if (reason.length < 3) errors.push(issue('reason_required', 'Для недостачи нужна обязательная причина.'));
+    if (!args.items.some((i) => i.action_qty > 0)) errors.push(issue('items_missing', 'Укажите количество недостачи.'));
+  }
+  return errors;
+}
 
 function issue(code: string, message: string): TransferManageIssue {
   return { code, message };
@@ -36,6 +87,7 @@ function emptyPreview(
     items: [],
     events: [],
     list: extras.list || [],
+    empty_list_message: extras.empty_list_message || null,
     reason: extras.reason || null,
     errors,
     operation_id: extras.operation_id || randomUUID(),
@@ -55,7 +107,7 @@ function lineActionQty(
 export function buildTransferManageMessage(preview: TransferManagePreview): string {
   if (preview.kind === 'list') {
     const lines = ['Доступные перемещения:'];
-    if (!preview.list.length) lines.push('Ничего не найдено.');
+    if (!preview.list.length) lines.push(preview.empty_list_message || 'Ничего не найдено.');
     for (const row of preview.list) {
       lines.push(`• ${row.transfer_number}: ${row.from_city_name} → ${row.to_city_name}, ${row.status}, в пути ${row.remaining}`);
     }
@@ -96,13 +148,13 @@ export async function resolveTransferManage(
     const { data: rows } = await db
       .from('stock_transfers')
       .select(
-        'id, transfer_number, from_city_id, to_city_id, status, created_at, stock_transfer_items(qty_sent, qty_received, qty_lost, qty_returned)'
+        'id, transfer_number, from_city_id, to_city_id, status, created_by, created_at, stock_transfer_items(qty_sent, qty_received, qty_lost, qty_returned)'
       )
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(100);
     const { data: cities } = await db.from('cities').select('id, name');
     const cityName = (id: string) => cities?.find((c) => c.id === id)?.name || id.slice(0, 8);
-    const list = (rows || []).map((row) => {
+    const mapped = (rows || []).map((row) => {
       const items = (row.stock_transfer_items || []) as Array<{
         qty_sent: number;
         qty_received: number | null;
@@ -124,9 +176,29 @@ export async function resolveTransferManage(
           lost: items.reduce((s, i) => s + Number(i.qty_lost || 0), 0),
         }),
         remaining,
+        created_by: row.created_by ? String(row.created_by) : null,
       };
     });
-    const preview = emptyPreview(intent.kind, [], { list });
+    const inTransit = intent.listFilter === 'in_transit';
+    const list = filterTransferManageList(mapped, {
+      inTransit,
+      mineOnly: intent.mineOnly,
+      actorId: actor.id || null,
+    }).map((row) => ({
+      transfer_number: row.transfer_number,
+      from_city_name: row.from_city_name,
+      to_city_name: row.to_city_name,
+      status: row.status,
+      remaining: row.remaining,
+    }));
+    const empty_list_message = list.length
+      ? null
+      : inTransit && intent.mineOnly
+        ? 'Нет ваших перемещений, ожидающих приёмки.'
+        : inTransit
+          ? 'Нет перемещений, ожидающих приёмки.'
+          : 'Ничего не найдено.';
+    const preview = emptyPreview(intent.kind, [], { list, empty_list_message });
     preview.can_confirm = false;
     return { content: buildTransferManageMessage(preview), preview };
   }
@@ -258,25 +330,14 @@ export async function resolveTransferManage(
     lost: items.reduce((s, i) => s + i.qty_lost, 0),
   });
 
-  if (intent.kind === 'receive' || intent.kind === 'return_remainder' || intent.kind === 'shortage') {
-    if (remaining <= 0) errors.push(issue('nothing_remaining', 'В пути ничего не осталось. Повторно вернуть или принять нельзя.'));
-    for (const line of items) {
-      if (line.action_qty < 0) errors.push(issue('qty_invalid', `${line.name}: некорректное количество.`));
-      if (line.action_qty > line.remaining) {
-        errors.push(
-          issue('qty_exceeds', `${line.name}: нужно не больше остатка в пути ${line.remaining}.`)
-        );
-      }
-    }
-    if (intent.kind === 'receive' && !items.some((i) => i.action_qty > 0)) {
-      errors.push(issue('items_missing', 'Укажите количество к приёмке.'));
-    }
-    if (intent.kind === 'shortage') {
-      const reason = (intent.reason || '').trim();
-      if (reason.length < 3) errors.push(issue('reason_required', 'Для недостачи нужна обязательная причина.'));
-      if (!items.some((i) => i.action_qty > 0)) errors.push(issue('items_missing', 'Укажите количество недостачи.'));
-    }
-  }
+  errors.push(
+    ...collectTransferManageActionErrors({
+      kind: intent.kind,
+      remaining,
+      items,
+      reason: intent.reason,
+    })
+  );
 
   const events: TransferManageEvent[] = (eventRows || []).map((e) => {
     const details = (e.details && typeof e.details === 'object' ? e.details : {}) as Record<string, unknown>;
@@ -293,6 +354,8 @@ export async function resolveTransferManage(
     kind: intent.kind,
     can_confirm:
       perm.allowed &&
+      !intent.previewOnly &&
+      remaining > 0 &&
       errors.length === 0 &&
       (intent.kind === 'receive' || intent.kind === 'return_remainder' || intent.kind === 'shortage'),
     transfer_id: String(tr.id),
@@ -306,6 +369,7 @@ export async function resolveTransferManage(
     items,
     events,
     list: [],
+    empty_list_message: null,
     reason: intent.reason,
     errors,
     operation_id: randomUUID(),

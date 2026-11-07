@@ -7,6 +7,9 @@ export type TransferManageIntent = {
   transferNumber: string | null;
   items: TransferManageParsedItem[];
   reason: string | null;
+  listFilter: 'all' | 'in_transit';
+  mineOnly: boolean;
+  previewOnly: boolean;
 };
 
 function formatTransferNumber(n: string): string {
@@ -63,6 +66,13 @@ export function parseTransferManageIntent(text: string): TransferManageIntent | 
   const shortage = /(недостач|спиши недостач|оформи недостач|write.?off)/i.test(raw);
   const lookupWord = /(где|статус|покажи|история|список|что с)/i.test(raw);
   const transferWord = /(перемещен\w*|отправк\w*|\btransfer\b)/i.test(raw);
+  const inTransitList =
+    /(ожида\w*.{0,24}при[её]м|ждут\s+при[её]м|к при[её]мк|непринят|в пути|awaiting|pending\s+receiv|waiting\s+(for\s+)?receiv)/i.test(
+      raw
+    );
+  const mineOnly = /(мои|моих|\bmy\b)/i.test(raw);
+  const previewOnly =
+    /(ничего не провод|не провод[иь]|не подтвержда|только покажи|покажи товар)/i.test(raw);
 
   let kind: TransferManageKind | null = null;
   if (shortage && (transferNumber || transferWord)) kind = 'shortage';
@@ -85,5 +95,8 @@ export function parseTransferManageIntent(text: string): TransferManageIntent | 
             .replace(/\s+/g, ' ')
             .trim()
         : null),
+    listFilter: kind === 'list' && inTransitList ? 'in_transit' : 'all',
+    mineOnly: kind === 'list' && mineOnly,
+    previewOnly,
   };
 }

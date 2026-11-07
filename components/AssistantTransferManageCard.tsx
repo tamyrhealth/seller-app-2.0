@@ -38,7 +38,9 @@ export default function AssistantTransferManageCard({
       </p>
       {preview.kind === 'list' ? (
         <ul className="mt-2 space-y-1 text-sm">
-          {preview.list.length === 0 ? <li>Ничего не найдено</li> : null}
+          {preview.list.length === 0 ? (
+            <li>{preview.empty_list_message || 'Ничего не найдено.'}</li>
+          ) : null}
           {preview.list.map((row) => (
             <li key={row.transfer_number}>
               {row.transfer_number}: {row.from_city_name} → {row.to_city_name} · {row.status} · в пути {row.remaining}

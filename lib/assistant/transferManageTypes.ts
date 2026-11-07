@@ -36,6 +36,7 @@ export type TransferManagePreview = {
   items: TransferManageLine[];
   events: TransferManageEvent[];
   list: { transfer_number: string; from_city_name: string; to_city_name: string; status: string; remaining: number }[];
+  empty_list_message: string | null;
   reason: string | null;
   errors: TransferManageIssue[];
   operation_id: string;
