@@ -1,4 +1,4 @@
-import { compactKey, levenshtein, nameKey, nameTokens, normalizeName } from '@/lib/assistant/nameFold';
+import { compactKey, levenshtein, nameKey, nameTokens, normalizeName, tokenClose } from '@/lib/assistant/nameFold';
 
 export { normalizeName, nameKey };
 
@@ -249,6 +249,39 @@ export function matchCatalogProducts(query: string, catalog: CatalogProduct[]): 
   const result = resolveProductQuery(query, catalog);
   if (result.chosen) return [result.chosen];
   return result.candidates;
+}
+
+function expandPackTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (const token of tokens) {
+    out.push(token);
+    const packed = /^(\d+)(g|kg|ml|l|sht)$/.exec(token);
+    if (packed) out.push(packed[1], packed[2]);
+  }
+  return out;
+}
+
+export function matchTransferCatalogProduct(query: string, catalog: CatalogProduct[]): ProductMatchResult {
+  const direct = resolveProductQuery(query, catalog);
+  if (direct.chosen) return direct;
+  const active = activeCatalog(catalog);
+  const qTok = expandPackTokens(productTokens(query));
+  if (!qTok.length) return { chosen: null, candidates: [], reason: 'none' };
+  const ranked = active
+    .map((product) => {
+      const pTok = expandPackTokens(productTokens(product.name));
+      const hit = qTok.filter((qt) => pTok.some((pt) => tokenClose(qt, pt) || qt === pt)).length;
+      return { product, score: hit / qTok.length };
+    })
+    .filter((row) => row.score >= 0.75)
+    .sort((a, b) => b.score - a.score);
+  if (!ranked.length) {
+    return { chosen: null, candidates: direct.candidates, reason: direct.candidates.length > 1 ? 'ambiguous' : 'none' };
+  }
+  const best = ranked[0];
+  const close = ranked.filter((row) => best.score - row.score < 0.08);
+  if (close.length === 1) return { chosen: close[0].product, candidates: [close[0].product], reason: 'similar' };
+  return { chosen: null, candidates: close.slice(0, 5).map((row) => row.product), reason: 'ambiguous' };
 }
 
 export function filterCatalogProducts(query: string, catalog: CatalogProduct[], limit = 8): CatalogProduct[] {

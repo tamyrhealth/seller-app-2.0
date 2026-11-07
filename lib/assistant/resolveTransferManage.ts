@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
-import { resolveProductQuery } from '@/lib/assistant/productAliases';
+import { matchTransferCatalogProduct } from '@/lib/assistant/productAliases';
 import { actorCanManageTransfers } from '@/lib/assistant/resolveTransfer';
 import type { TransferManageIntent } from '@/lib/assistant/transferManageIntent';
 import type {
@@ -152,6 +152,7 @@ export function collectTransferManageActionErrors(args: {
   remaining: number;
   items: Array<{ name: string; action_qty: number; remaining: number }>;
   reason: string | null;
+  skipQtyPrompt?: boolean;
 }): TransferManageIssue[] {
   const errors: TransferManageIssue[] = [];
   if (args.kind !== 'receive' && args.kind !== 'return_remainder' && args.kind !== 'shortage') {
@@ -173,7 +174,7 @@ export function collectTransferManageActionErrors(args: {
       errors.push(issue('qty_exceeds', `${line.name}: нужно не больше остатка в пути ${line.remaining}.`));
     }
   }
-  if (args.kind === 'receive' && !args.items.some((i) => i.action_qty > 0)) {
+  if (args.kind === 'receive' && !args.items.some((i) => i.action_qty > 0) && !args.skipQtyPrompt) {
     errors.push(
       issue(
         'items_missing',
@@ -184,7 +185,9 @@ export function collectTransferManageActionErrors(args: {
   if (args.kind === 'shortage') {
     const reason = (args.reason || '').trim();
     if (reason.length < 3) errors.push(issue('reason_required', 'Для недостачи нужна обязательная причина.'));
-    if (!args.items.some((i) => i.action_qty > 0)) errors.push(issue('items_missing', 'Укажите количество недостачи.'));
+    if (!args.items.some((i) => i.action_qty > 0) && !args.skipQtyPrompt) {
+      errors.push(issue('items_missing', 'Укажите количество недостачи.'));
+    }
   }
   return errors;
 }
@@ -419,7 +422,7 @@ export async function resolveTransferManage(
   }
   if (intent.kind !== 'lookup' && intent.items.length) {
     for (const row of intent.items) {
-      const hit = resolveProductQuery(
+      const hit = matchTransferCatalogProduct(
         row.raw_name,
         catalog.map((c) => ({
           id: c.product_id,
@@ -482,6 +485,7 @@ export async function resolveTransferManage(
       remaining,
       items,
       reason: intent.reason,
+      skipQtyPrompt: errors.some((e) => e.code === 'product_not_found' || e.code === 'product_ambiguous'),
     })
   );
 

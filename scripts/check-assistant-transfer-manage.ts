@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { matchTransferCatalogProduct } from '../lib/assistant/productAliases';
 import { actorCanCreateTransfer, actorCanManageTransfers } from '../lib/assistant/resolveTransfer';
 import { parseCancelIntent } from '../lib/assistant/cancelIntent';
 import { parseTransferIntent } from '../lib/assistant/transferIntent';
@@ -56,22 +57,53 @@ if (previewReceive?.kind !== 'receive') fail('preview receive still receive kind
 if (previewReceive?.transferNumber !== 'T000006') fail('preview receive number');
 if (previewReceive?.previewOnly !== true) fail('do not confirm informational receive');
 if (parseTransferManageIntent('Прими T000005')?.previewOnly) fail('real receive must still confirm');
-const partialRu = parseTransferManageIntent('Прими 2 штуки порошка ОРГ 250 г из перемещения T000010');
+const partialRu = parseTransferManageIntent('Прими 2 штуки порошка ОРГ 250 г из перемещения T000011.');
 if (partialRu?.kind !== 'receive') fail('partial receive kind');
-if (partialRu?.transferNumber !== 'T000010') fail('partial receive number');
+if (partialRu?.transferNumber !== 'T000011') fail('partial receive number T000011');
 if (partialRu?.explicitAll) fail('partial receive is not take-all');
 if (partialRu?.items.length !== 1 || partialRu.items[0].qty !== 2) {
   fail(`partial receive qty must be 2, got ${JSON.stringify(partialRu?.items)}`);
 }
+if (/перемещ|отправк|ауыстыру/i.test(partialRu.items[0].raw_name)) {
+  fail(`transfer clause leaked into name: ${partialRu.items[0].raw_name}`);
+}
 if (!/порош/i.test(partialRu.items[0].raw_name) || !/250/i.test(partialRu.items[0].raw_name)) {
   fail(`partial receive name must keep powder 250g, got ${partialRu.items[0].raw_name}`);
 }
+const powderCatalog = [
+  { id: 'p250', name: 'ПОРОШОК ОРГ 250г', unit: 'pcs', price_retail: 1, is_active: true },
+  { id: 'tea', name: 'Чай', unit: 'pcs', price_retail: 1, is_active: true },
+];
+const powderHit = matchTransferCatalogProduct(partialRu.items[0].raw_name, powderCatalog);
+if (powderHit.chosen?.id !== 'p250') {
+  fail(`порошка ОРГ 250 г must match ПОРОШОК ОРГ 250г, got ${powderHit.chosen?.name || powderHit.reason}`);
+}
+if (
+  collectTransferManageActionErrors({
+    kind: 'receive',
+    remaining: 3,
+    items: [{ name: 'ПОРОШОК ОРГ 250г', action_qty: 0, remaining: 3 }],
+    reason: null,
+    skipQtyPrompt: true,
+  }).some((e) => e.code === 'items_missing')
+) {
+  fail('product mismatch must not be reported as missing qty');
+}
+const byTransfer = parseTransferManageIntent('Прими 2 штуки порошка ОРГ 250 г по перемещению T000011');
+if (byTransfer?.items[0]?.qty !== 2 || /перемещ/i.test(byTransfer.items[0].raw_name)) {
+  fail('по перемещению must strip transfer clause');
+}
+const kzFrom = parseTransferManageIntent('2 дана ұнтақ ОРГ 250 г ауыстырудан T000011 қабылда');
+if (kzFrom?.kind !== 'receive' || kzFrom.items[0]?.qty !== 2 || /ауыстыру/i.test(kzFrom.items[0].raw_name || '')) {
+  fail(`kz ауыстырудан parse ${JSON.stringify(kzFrom?.items)}`);
+}
 const partialKz = parseTransferManageIntent('T000010-дан 2 дана ұнтақ ОРГ 250 г қабылда');
 if (partialKz?.kind !== 'receive' || partialKz.items[0]?.qty !== 2) fail('kz partial receive qty 2');
-const twoItems = parseTransferManageIntent('Прими 2 порошка ОРГ 250 г и 1 чай из T000010');
+const twoItems = parseTransferManageIntent('Прими 2 порошка ОРГ 250 г и 1 чай из перемещения T000011');
 if (twoItems?.items.length !== 2 || twoItems.items[0].qty !== 2 || twoItems.items[1].qty !== 1) {
   fail(`two-item receive parse ${JSON.stringify(twoItems?.items)}`);
 }
+if (twoItems.items.some((item) => /перемещ/i.test(item.raw_name))) fail('two-item names must drop transfer clause');
 if (parseTransferManageIntent('Прими T000010')?.items.length) fail('bare receive must not invent item qty');
 if (parseTransferManageIntent('Прими T000010')?.explicitAll) fail('bare receive is not take-all');
 if (!parseTransferManageIntent('Прими всё из T000010')?.explicitAll) fail('explicit all remaining');
@@ -345,6 +377,8 @@ if (!resolveSrc.includes('intent.listFilter === \'in_transit\'') && !resolveSrc.
 }
 if (!resolveSrc.includes('!intent.previewOnly')) fail('informational receive must not set can_confirm');
 if (!resolveSrc.includes('remaining > 0')) fail('can_confirm requires remaining in transit');
+if (!resolveSrc.includes('matchTransferCatalogProduct')) fail('transfer lines must use declension-tolerant product match');
+if (!resolveSrc.includes('skipQtyPrompt')) fail('product mismatch must not look like missing qty');
 if (!resolveSrc.includes('assignManageActionQty')) fail('receive qty must come from assignManageActionQty');
 if (!resolveSrc.includes('takeAllRemaining')) fail('full remaining only when explicitly requested');
 if (!manage.includes('fetchTransferManageLive')) fail('confirm must reload live transfer into the card');

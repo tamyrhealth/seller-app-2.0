@@ -100,3 +100,15 @@ export function levenshtein(a: string, b: string): number {
 export function compactKey(value: string): string {
   return nameKey(value).replace(/\s+/g, '');
 }
+
+export function tokenClose(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
+  if (Math.min(a.length, b.length) >= 6 && levenshtein(a, b) <= 1) return true;
+  const stem = (t: string) => t.replace(/[aeiouy]+$/g, '');
+  const as = stem(a);
+  const bs = stem(b);
+  if (as.length >= 5 && bs.length >= 5 && (as === bs || levenshtein(as, bs) <= 1)) return true;
+  return false;
+}

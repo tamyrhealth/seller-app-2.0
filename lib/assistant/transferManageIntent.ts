@@ -31,13 +31,22 @@ function parseQty(raw: string): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
-function cleanItemName(value: string): string {
+function stripTransferClause(value: string): string {
   return value
     .replace(/t\s*0*\d+/gi, ' ')
-    .replace(/^(прими|принять|принят\w*|получи|получить|қабылда\w*|верни|отмени|недостач\w*)\s+/i, '')
-    .replace(/\s+(из|ден|дан|тен|тан)\s+(перемещ\w*|отправк\w*)\b.*$/i, '')
-    .replace(/\s+(из|в|на|қабылда\w*|прими|получи)$/i, '')
-    .replace(/\b(перемещен\w*|отправк\w*|остаток|остатка)\b/gi, ' ')
+    .replace(/\s+(?:из|по|от)\s+(?:перемещен\p{L}*|отправк\p{L}*)/giu, ' ')
+    .replace(
+      /\s+(?:перемещен\p{L}*|отправк\p{L}*|ауыстыру\p{L}*|жөнелт\p{L}*|жонелт\p{L}*)(?:ден|дан|тен|тан|нен|нан)?/giu,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanItemName(value: string): string {
+  return stripTransferClause(value)
+    .replace(/^(прими|принять|принят\p{L}*|получи|получить|қабылда\p{L}*|верни|отмени|недостач\p{L}*)\s+/iu, '')
+    .replace(/\s+(из|в|на|қабылда\p{L}*|прими|получи)$/iu, '')
     .replace(/[.,;:!?—–]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -68,7 +77,7 @@ function parseItemChunk(chunk: string): TransferManageParsedItem | null {
 }
 
 export function extractTransferManageItems(text: string): TransferManageParsedItem[] {
-  const source = text.replace(/t\s*0*\d+/gi, ' ');
+  const source = stripTransferClause(text);
   const items: TransferManageParsedItem[] = [];
   const seen = new Set<string>();
   for (const chunk of source.split(/\n|,|;| и | және /i).map((s) => s.trim()).filter(Boolean)) {
