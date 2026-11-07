@@ -158,7 +158,13 @@ export function collectTransferManageActionErrors(args: {
     return errors;
   }
   if (args.remaining <= 0) {
-    errors.push(issue('nothing_remaining', 'В пути ничего не осталось. Повторно вернуть или принять нельзя.'));
+    if (args.kind === 'shortage') {
+      errors.push(issue('nothing_remaining', 'В пути ничего не осталось. Недостачу повторно списать нельзя.'));
+    } else if (args.kind === 'return_remainder') {
+      errors.push(issue('nothing_remaining', 'В пути ничего не осталось. Повторно вернуть остаток нельзя.'));
+    } else {
+      errors.push(issue('nothing_remaining', 'В пути ничего не осталось. Повторно принять нельзя.'));
+    }
     return errors;
   }
   for (const line of args.items) {
@@ -168,7 +174,12 @@ export function collectTransferManageActionErrors(args: {
     }
   }
   if (args.kind === 'receive' && !args.items.some((i) => i.action_qty > 0)) {
-    errors.push(issue('items_missing', 'Укажите количество к приёмке.'));
+    errors.push(
+      issue(
+        'items_missing',
+        'Укажите количество к приёмке, например «прими 2 штуки …». Весь остаток автоматически не принимаю.'
+      )
+    );
   }
   if (args.kind === 'shortage') {
     const reason = (args.reason || '').trim();
@@ -208,14 +219,17 @@ function emptyPreview(
   };
 }
 
-function lineActionQty(
-  kind: TransferManagePreview['kind'],
-  remaining: number,
-  matched: number | null
-): number {
-  if (kind === 'lookup' || kind === 'list') return 0;
-  if (matched == null) return remaining;
-  return matched;
+export function assignManageActionQty(opts: {
+  kind: TransferManagePreview['kind'];
+  remaining: number;
+  matchedQty: number | undefined;
+  takeAllRemaining: boolean;
+}): number {
+  if (opts.kind === 'lookup' || opts.kind === 'list') return 0;
+  if (opts.kind === 'return_remainder') return opts.remaining;
+  if (opts.matchedQty != null) return opts.matchedQty;
+  if (opts.takeAllRemaining) return opts.remaining;
+  return 0;
 }
 
 export function buildTransferManageMessage(preview: TransferManagePreview): string {
@@ -231,7 +245,16 @@ export function buildTransferManageMessage(preview: TransferManagePreview): stri
   const lines = [
     `${preview.transfer_number || 'Перемещение'}: ${preview.from_city_name || '—'} → ${preview.to_city_name || '—'}.`,
     `Статус: ${preview.status || '—'}. В пути: ${preview.remaining}.`,
-    ...preview.items.map((i) => `• ${i.name}: отправлено ${i.qty_sent}, принято ${i.qty_received}, возвращено ${i.qty_returned}, списано ${i.qty_lost}, в пути ${i.remaining}`),
+    ...preview.items.map((i) => {
+      const leftover = Number((i.remaining - i.action_qty).toFixed(3));
+      const actionLabel =
+        preview.kind === 'shortage' ? 'к списанию' : preview.kind === 'return_remainder' ? 'к возврату' : 'к приёмке';
+      const action =
+        i.action_qty > 0 && preview.kind !== 'lookup' && preview.kind !== 'list'
+          ? `, ${actionLabel} ${i.action_qty}, останется ${leftover}`
+          : '';
+      return `• ${i.name}: отправлено ${i.qty_sent}, принято ${i.qty_received}, возвращено ${i.qty_returned}, списано ${i.qty_lost}, в пути ${i.remaining}${action}`;
+    }),
   ];
   if (preview.events.length) {
     lines.push('История:');
@@ -407,23 +430,32 @@ export async function resolveTransferManage(
         }))
       );
       if (!hit.chosen) {
-        errors.push(issue('product_not_found', `Товар «${row.raw_name}» не найден в этом перемещении.`));
+        if ((hit.candidates || []).length > 1) {
+          errors.push(
+            issue(
+              'product_ambiguous',
+              `Товар «${row.raw_name}» неоднозначен: ${hit.candidates.map((p) => p.name).join(', ')}. Уточните.`
+            )
+          );
+        } else {
+          errors.push(issue('product_not_found', `Товар «${row.raw_name}» не найден в этом перемещении.`));
+        }
         continue;
       }
       matchedQty.set(hit.chosen.id, (matchedQty.get(hit.chosen.id) || 0) + row.qty);
     }
   }
 
-  const specifiedMode =
-    (intent.kind === 'receive' || intent.kind === 'shortage') && intent.items.length > 0;
+  const takeAllRemaining =
+    (intent.kind === 'receive' || intent.kind === 'shortage') && intent.explicitAll && intent.items.length === 0;
   const items: TransferManageLine[] = catalog.map((c) => {
     const remaining = c.remaining;
-    const specified = matchedQty.has(c.product_id)
-      ? Number(matchedQty.get(c.product_id))
-      : specifiedMode
-        ? 0
-        : remaining;
-    const action_qty = lineActionQty(intent.kind, remaining, specified);
+    const action_qty = assignManageActionQty({
+      kind: intent.kind,
+      remaining,
+      matchedQty: matchedQty.has(c.product_id) ? Number(matchedQty.get(c.product_id)) : undefined,
+      takeAllRemaining,
+    });
     return {
       product_id: c.product_id,
       name: c.name,

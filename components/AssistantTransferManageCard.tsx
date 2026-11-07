@@ -65,7 +65,15 @@ export default function AssistantTransferManageCard({
               <li key={item.product_id}>
                 {item.name}: отправлено {item.qty_sent}, принято {item.qty_received}, возвращено {item.qty_returned},
                 списано {item.qty_lost}, в пути {item.remaining}
-                {canAct && item.action_qty > 0 ? ` · сейчас ${item.action_qty}` : ''}
+                {item.action_qty > 0 && state !== 'confirmed'
+                  ? ` · ${
+                      preview.kind === 'shortage'
+                        ? 'к списанию'
+                        : preview.kind === 'return_remainder'
+                          ? 'к возврату'
+                          : 'к приёмке'
+                    } ${item.action_qty} · останется ${Number((item.remaining - item.action_qty).toFixed(3))}`
+                  : ''}
               </li>
             ))}
           </ul>
