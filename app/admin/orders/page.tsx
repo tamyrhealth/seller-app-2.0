@@ -22,6 +22,12 @@ import { displayOrderNumber, parseOrderNumberQuery } from '@/lib/orderNumber';
 import { runExclusive } from '@/lib/exclusiveAsync';
 import { useAuth } from '@/lib/auth';
 import { readUserUi, writeUserUi } from '@/lib/uiStorage';
+import {
+  orderHistoryActionLabel,
+  orderHistoryActorLabel,
+  orderHistoryPaymentLabel,
+  parseOrderHistoryItems,
+} from '@/lib/orderActionHistory';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -144,6 +150,7 @@ export default function AdminOrdersPage() {
     user_role: string | null;
     details: Record<string, unknown> | null;
   }>>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [preorderColumnsMissing, setPreorderColumnsMissing] = useState(false);
   const [periodRevenue, setPeriodRevenue] = useState<number>(0);
 
@@ -327,8 +334,10 @@ export default function AdminOrdersPage() {
     if (!selectedId) {
       setOrderDetail(null);
       setOrderHistory([]);
+      setHistoryError(null);
       return;
     }
+    setHistoryError(null);
     supabase
       .from('orders')
       .select('*, order_items(*)')
@@ -341,7 +350,15 @@ export default function AdminOrdersPage() {
       .eq('entity_type', 'order')
       .eq('entity_id', selectedId)
       .order('created_at', { ascending: true })
-      .then(({ data }) => setOrderHistory((data as typeof orderHistory) ?? []));
+      .then(({ data, error }) => {
+        if (error) {
+          setOrderHistory([]);
+          setHistoryError(error.message || t('admin.historyError'));
+          return;
+        }
+        setHistoryError(null);
+        setOrderHistory((data as typeof orderHistory) ?? []);
+      });
   }, [selectedId, refreshKey]);
 
   async function handleCancel(orderId: string, reason?: string | null) {
@@ -777,16 +794,62 @@ export default function AdminOrdersPage() {
                 {orderDetail.comment && <p className="text-gray-900">{t('admin.comment')}: {orderDetail.comment}</p>}
                 <div className="mt-3 pt-3 border-t border-gray-200">
                   <p className="text-sm font-semibold text-gray-900 mb-1">{t('admin.history')}</p>
-                  {orderHistory.length === 0 ? (
+                  {historyError ? (
+                    <p className="text-xs text-red-700">{t('admin.historyError')}: {historyError}</p>
+                  ) : orderHistory.length === 0 ? (
                     <p className="text-xs text-gray-600">{t('admin.historyEmpty')}</p>
                   ) : (
-                    <ul className="space-y-1 text-xs text-gray-800">
-                      {orderHistory.map((h) => (
-                        <li key={h.id}>
-                          {formatDate(h.created_at)} · {h.action}
-                          {h.user_name ? ` · ${h.user_name}` : ''}
-                        </li>
-                      ))}
+                    <ul className="space-y-2 text-xs text-gray-800">
+                      {orderHistory.map((h) => {
+                        const details = (h.details || {}) as Record<string, unknown>;
+                        const items = parseOrderHistoryItems(details);
+                        const total = details.total_sum == null ? null : Number(details.total_sum);
+                        const reason = typeof details.reason === 'string' ? details.reason : '';
+                        const payment =
+                          orderHistoryPaymentLabel(
+                            (typeof details.payment_method === 'string' && details.payment_method) ||
+                              (typeof details.payment_type === 'string' ? details.payment_type : null)
+                          );
+                        return (
+                          <li key={h.id} className="rounded-md bg-gray-50 px-2 py-1.5">
+                            <p>
+                              {formatDate(h.created_at)} · {orderHistoryActionLabel(h.action, details)}
+                            </p>
+                            <p className="text-gray-600">
+                              {t('admin.historyWho')}: {orderHistoryActorLabel(h.user_name, h.user_role)}
+                            </p>
+                            {total != null && Number.isFinite(total) ? (
+                              <p>
+                                {t('admin.historySum')}: {formatMoney(total)} ₸
+                              </p>
+                            ) : null}
+                            {payment ? (
+                              <p>
+                                {t('admin.historyPayment')}: {payment}
+                              </p>
+                            ) : null}
+                            {reason ? (
+                              <p>
+                                {t('admin.historyReason')}: {reason}
+                              </p>
+                            ) : null}
+                            {items.length > 0 ? (
+                              <ul className="mt-1 space-y-0.5">
+                                {items.map((item, idx) => (
+                                  <li key={`${h.id}-${idx}`}>
+                                    {item.name} × {item.qty}
+                                    {item.is_gift
+                                      ? ` ${t('common.gift')}`
+                                      : item.line_sum != null
+                                        ? ` = ${formatMoney(item.line_sum)} ₸`
+                                        : ''}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </div>

@@ -11,24 +11,12 @@ export interface ActionLogParams {
 }
 
 /**
- * Логирует действие в public.action_logs.
- * Не блокирует основную операцию — ошибки логирования игнорируются.
+ * Клиентская запись в action_logs закрыта (этап 5.4.2).
+ * История заказов пишется только SECURITY DEFINER SQL (`log_order_action`).
  */
 export async function logAction(
-  supabase: SupabaseClient,
-  params: ActionLogParams
+  _supabase: SupabaseClient,
+  _params: ActionLogParams
 ): Promise<void> {
-  try {
-    await supabase.from('action_logs').insert({
-      user_id: params.user_id ?? null,
-      user_name: params.user_name ?? null,
-      user_role: params.user_role ?? null,
-      action: params.action,
-      entity_type: params.entity_type ?? null,
-      entity_id: params.entity_id ?? null,
-      details: params.details ?? {},
-    });
-  } catch {
-    // Игнорируем ошибки логирования — не ломаем основной поток
-  }
+  return;
 }

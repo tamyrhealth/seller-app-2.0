@@ -272,6 +272,12 @@ const ru: Dict = {
   'admin.searchNumber': 'Поиск по номеру',
   'admin.history': 'История',
   'admin.historyEmpty': 'Записей нет',
+  'admin.historyError': 'Не удалось загрузить историю',
+  'admin.historyWho': 'Кто',
+  'admin.historySum': 'Сумма',
+  'admin.historyItems': 'Состав',
+  'admin.historyReason': 'Причина',
+  'admin.historyPayment': 'Оплата',
 };
 
 const kz: Dict = {
@@ -540,6 +546,12 @@ const kz: Dict = {
   'admin.searchNumber': 'Нөмір бойынша іздеу',
   'admin.history': 'Тарих',
   'admin.historyEmpty': 'Жазба жоқ',
+  'admin.historyError': 'Тарихты жүктеу мүмкін болмады',
+  'admin.historyWho': 'Кім',
+  'admin.historySum': 'Сома',
+  'admin.historyItems': 'Құрам',
+  'admin.historyReason': 'Себеп',
+  'admin.historyPayment': 'Төлем',
 };
 
 const dictionaries: Record<Lang, Dict> = { ru, kz };
