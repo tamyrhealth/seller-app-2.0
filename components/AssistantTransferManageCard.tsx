@@ -53,7 +53,9 @@ export default function AssistantTransferManageCard({
             {preview.transfer_number} · {preview.from_city_name || '—'} → {preview.to_city_name || '—'}
           </p>
           <p className="text-sm text-gray-700">
-            Статус: {state === 'confirmed' ? 'Операция выполнена' : preview.status || '—'} · в пути {preview.remaining}
+            Статус:{' '}
+            {state === 'confirmed' ? preview.status || 'Операция выполнена' : preview.status || '—'} · в пути{' '}
+            {preview.remaining}
           </p>
           {preview.created_by_name ? (
             <p className="text-sm text-gray-700">Отправил: {preview.created_by_name}</p>

@@ -33,6 +33,120 @@ export function filterTransferManageList(
   });
 }
 
+export type TransferManageMutationSnapshot = {
+  remaining: number;
+  received: number;
+  returned: number;
+  lost: number;
+  events: number;
+};
+
+export function transferManageMutationSnapshot(preview: TransferManagePreview): TransferManageMutationSnapshot {
+  return {
+    remaining: preview.remaining,
+    received: preview.items.reduce((sum, item) => sum + item.qty_received, 0),
+    returned: preview.items.reduce((sum, item) => sum + item.qty_returned, 0),
+    lost: preview.items.reduce((sum, item) => sum + item.qty_lost, 0),
+    events: preview.events.length,
+  };
+}
+
+export function didManageMutationApply(
+  kind: TransferManagePreview['kind'],
+  before: TransferManageMutationSnapshot,
+  after: TransferManageMutationSnapshot
+): boolean {
+  if (after.events > before.events) return true;
+  if (after.remaining < before.remaining) return true;
+  if (kind === 'receive' && after.received > before.received) return true;
+  if (kind === 'return_remainder' && after.returned > before.returned) return true;
+  if (kind === 'shortage' && after.lost > before.lost) return true;
+  if (before.remaining <= 0 && after.remaining <= 0) return true;
+  return false;
+}
+
+export async function fetchTransferManageLive(
+  db: SupabaseClient,
+  base: TransferManagePreview
+): Promise<TransferManagePreview | null> {
+  if (!base.transfer_id) return null;
+  const { data: tr, error } = await db
+    .from('stock_transfers')
+    .select(
+      'id, transfer_number, from_city_id, to_city_id, status, created_by, created_at, stock_transfer_items(product_id, qty_sent, qty_received, qty_lost, qty_returned, products(name, unit))'
+    )
+    .eq('id', base.transfer_id)
+    .maybeSingle();
+  if (error || !tr) return null;
+  const { data: cities } = await db.from('cities').select('id, name');
+  const cityName = (id: string | null) => cities?.find((c) => c.id === id)?.name || id?.slice(0, 8) || null;
+  const { data: eventRows } = await db
+    .from('stock_transfer_events')
+    .select('action, actor_id, details, created_at')
+    .eq('transfer_id', tr.id)
+    .order('created_at', { ascending: true });
+  const actorIds = [...new Set((eventRows || []).map((e) => e.actor_id).filter(Boolean) as string[])];
+  if (tr.created_by) actorIds.push(String(tr.created_by));
+  const { data: actorProfiles } =
+    actorIds.length > 0
+      ? await db.from('profiles').select('id, display_name').in('id', [...new Set(actorIds)])
+      : { data: [] };
+  const nameById = new Map((actorProfiles || []).map((p) => [p.id as string, (p.display_name as string) || p.id.slice(0, 8)]));
+  const items: TransferManageLine[] = (
+    (tr.stock_transfer_items || []) as Array<{
+      product_id: string;
+      qty_sent: number;
+      qty_received: number | null;
+      qty_lost: number | null;
+      qty_returned: number | null;
+      products?: { name?: string; unit?: string | null } | { name?: string; unit?: string | null }[] | null;
+    }>
+  ).map((row) => {
+    const prod = Array.isArray(row.products) ? row.products[0] : row.products;
+    const q = transferLineQtys(row);
+    return {
+      product_id: row.product_id,
+      name: prod?.name || row.product_id.slice(0, 8),
+      unit: prod?.unit || null,
+      qty_sent: q.sent,
+      qty_received: q.received,
+      qty_returned: q.returned,
+      qty_lost: q.lost,
+      remaining: q.remaining,
+      action_qty: 0,
+    };
+  });
+  const remaining = items.reduce((sum, item) => sum + item.remaining, 0);
+  const events: TransferManageEvent[] = (eventRows || []).map((e) => {
+    const details = (e.details && typeof e.details === 'object' ? e.details : {}) as Record<string, unknown>;
+    return {
+      action: String(e.action),
+      actor_id: e.actor_id || null,
+      actor_name: e.actor_id ? nameById.get(e.actor_id) || e.actor_id.slice(0, 8) : null,
+      created_at: String(e.created_at),
+      reason: typeof details.reason === 'string' ? details.reason : null,
+    };
+  });
+  return {
+    ...base,
+    can_confirm: false,
+    transfer_number: String(tr.transfer_number),
+    from_city_name: cityName(String(tr.from_city_id)),
+    to_city_name: cityName(String(tr.to_city_id)),
+    status: transferDisplayStatus({
+      status: String(tr.status),
+      remaining,
+      received: items.reduce((sum, item) => sum + item.qty_received, 0),
+      lost: items.reduce((sum, item) => sum + item.qty_lost, 0),
+    }),
+    created_by_name: tr.created_by ? nameById.get(String(tr.created_by)) || String(tr.created_by).slice(0, 8) : base.created_by_name,
+    remaining,
+    items,
+    events,
+    errors: [],
+  };
+}
+
 export function collectTransferManageActionErrors(args: {
   kind: TransferManagePreview['kind'];
   remaining: number;

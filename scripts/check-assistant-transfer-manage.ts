@@ -7,7 +7,9 @@ import { parseTransferManageIntent, parseTransferNumberQuery } from '../lib/assi
 import {
   buildTransferManageMessage,
   collectTransferManageActionErrors,
+  didManageMutationApply,
   filterTransferManageList,
+  transferManageMutationSnapshot,
 } from '../lib/assistant/resolveTransferManage';
 import type { TransferManagePreview } from '../lib/assistant/transferManageTypes';
 import { isAssistantRole } from '../lib/roles';
@@ -144,6 +146,65 @@ const missingQtyErrs = collectTransferManageActionErrors({
   reason: null,
 });
 if (!missingQtyErrs.some((e) => e.code === 'items_missing')) fail('open receive still requires qty when none given');
+
+const beforeReceive: TransferManagePreview = {
+  ...emptyListPreview,
+  kind: 'receive',
+  remaining: 1,
+  items: [
+    {
+      product_id: 'p1',
+      name: 'Товар',
+      unit: 'pcs',
+      qty_sent: 1,
+      qty_received: 0,
+      qty_returned: 0,
+      qty_lost: 0,
+      remaining: 1,
+      action_qty: 1,
+    },
+  ],
+  events: [{ action: 'sent', actor_id: 'a', actor_name: 'A', created_at: '1', reason: null }],
+};
+const afterReceive: TransferManagePreview = {
+  ...beforeReceive,
+  remaining: 0,
+  status: 'Получено',
+  can_confirm: false,
+  items: [{ ...beforeReceive.items[0], qty_received: 1, remaining: 0, action_qty: 0 }],
+  events: [
+    ...beforeReceive.events,
+    { action: 'received_partial', actor_id: 'b', actor_name: 'B', created_at: '2', reason: null },
+  ],
+};
+if (
+  !didManageMutationApply(
+    'receive',
+    transferManageMutationSnapshot(beforeReceive),
+    transferManageMutationSnapshot(afterReceive)
+  )
+) {
+  fail('successful receive must count as applied');
+}
+if (
+  didManageMutationApply(
+    'receive',
+    transferManageMutationSnapshot(beforeReceive),
+    transferManageMutationSnapshot(beforeReceive)
+  )
+) {
+  fail('unchanged in-transit snapshot must not look like success');
+}
+const alreadyClosed: TransferManagePreview = { ...afterReceive };
+if (
+  !didManageMutationApply(
+    'receive',
+    transferManageMutationSnapshot(alreadyClosed),
+    transferManageMutationSnapshot(alreadyClosed)
+  )
+) {
+  fail('idempotent replay on remaining 0 must be allowed');
+}
 if (parseTransferIntent('Прими T000005')) fail('create parser must ignore receive');
 if (parseCancelIntent('Отмени перемещение T000005')) fail('order cancel must ignore transfer cancel');
 if (!parseCancelIntent('Отмени заказ N000033')) fail('order cancel still works');
@@ -245,5 +306,19 @@ if (!resolveSrc.includes('intent.listFilter === \'in_transit\'') && !resolveSrc.
 }
 if (!resolveSrc.includes('!intent.previewOnly')) fail('informational receive must not set can_confirm');
 if (!resolveSrc.includes('remaining > 0')) fail('can_confirm requires remaining in transit');
+if (!manage.includes('fetchTransferManageLive')) fail('confirm must reload live transfer into the card');
+if (!manage.includes('didManageMutationApply')) fail('success must require an applied mutation');
+if (!manage.includes("'not_applied'")) fail('no-op RPC must not mark the card confirmed');
+if (manage.includes('preview: { ...preview, can_confirm: false }')) {
+  fail('must not persist the pre-receive snapshot as success');
+}
+const inspectT7 = read('supabase/prod/inspect_transfer_t000007.sql');
+if (/^\s*(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/im.test(inspectT7.replace(/--.*$/gm, ''))) {
+  fail('T000007 inspect must be SELECT-only');
+}
+if (!inspectT7.includes("transfer_number = 'T000007'")) fail('inspect T000007');
+if (!inspectT7.includes('qty_in_transit')) fail('inspect remaining');
+if (!inspectT7.includes('stock_transfer_events')) fail('inspect events');
+if (!inspectT7.includes("metadata->>'kind' = 'transfer_manage'")) fail('inspect assistant card snapshot');
 
 console.log('check-assistant-transfer-manage: ok');

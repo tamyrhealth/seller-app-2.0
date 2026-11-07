@@ -3,6 +3,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { isAssistantRole } from '@/lib/roles';
 import { createServiceClient, createUserClient, readBearerToken } from '@/lib/assistant/supabaseServer';
 import { actorCanManageTransfers } from '@/lib/assistant/resolveTransfer';
+import {
+  didManageMutationApply,
+  fetchTransferManageLive,
+  transferManageMutationSnapshot,
+} from '@/lib/assistant/resolveTransferManage';
 import type { TransferManagePreview } from '@/lib/assistant/transferManageTypes';
 import { mapTransferRpcError } from '@/lib/stockTransfer';
 import { transferRemaining } from '@/lib/stockTransfer';
@@ -105,7 +110,11 @@ export async function POST(req: Request) {
   if (meta.kind !== 'transfer_manage') return jsonError(409, 'wrong_card', 'Это не карточка управления перемещением.');
   const preview = meta.preview as TransferManagePreview | undefined;
   if (!preview) return jsonError(409, 'wrong_card', 'Нет данных карточки.');
-  if (meta.state === 'confirmed') return NextResponse.json({ ok: true, reused: true });
+  if (meta.state === 'confirmed') {
+    const live = await fetchTransferManageLive(userDb, preview);
+    if (live) await persistState(service, { chatId, messageId, state: 'confirmed', preview: live });
+    return NextResponse.json({ ok: true, reused: true });
+  }
   if (meta.state === 'dismissed') {
     if (action === 'dismiss') return NextResponse.json({ ok: true, dismissed: true, reused: true });
     return jsonError(409, 'dismissed', 'Операция уже отклонена. Склад не изменён.');
@@ -121,12 +130,12 @@ export async function POST(req: Request) {
     return jsonError(409, 'blocked', 'Эту операцию нельзя подтвердить.');
   }
 
-  const { data: live } = await userDb
+  const { data: liveItems } = await userDb
     .from('stock_transfer_items')
     .select('product_id, qty_sent, qty_received, qty_lost, qty_returned')
     .eq('transfer_id', preview.transfer_id);
   const remainByProduct = new Map(
-    (live || []).map((row) => [
+    (liveItems || []).map((row) => [
       String(row.product_id),
       transferRemaining(Number(row.qty_sent), row.qty_received, row.qty_lost, row.qty_returned),
     ])
@@ -180,6 +189,13 @@ export async function POST(req: Request) {
     return jsonError(409, 'rpc', mapTransferRpcError(rpcError), /idempotency|pending|timeout/i.test(rpcError));
   }
 
-  await persistState(service, { chatId, messageId, state: 'confirmed', preview: { ...preview, can_confirm: false } });
+  const live = await fetchTransferManageLive(userDb, preview);
+  if (!live) {
+    return jsonError(503, 'reload_failed', 'Операция могла записаться, но карточку не удалось обновить. Обновите чат.', true);
+  }
+  if (!didManageMutationApply(preview.kind, transferManageMutationSnapshot(preview), transferManageMutationSnapshot(live))) {
+    return jsonError(409, 'not_applied', 'Операция не записана в перемещение. Склад не изменён.');
+  }
+  await persistState(service, { chatId, messageId, state: 'confirmed', preview: live });
   return NextResponse.json({ ok: true });
 }
