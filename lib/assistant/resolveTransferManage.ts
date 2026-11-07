@@ -269,7 +269,13 @@ export function buildTransferManageMessage(preview: TransferManagePreview): stri
   if (preview.can_confirm) {
     if (preview.kind === 'receive') lines.push('Проверьте количества и нажмите «Подтвердить приёмку».');
     if (preview.kind === 'return_remainder') lines.push('Нажмите «Вернуть остаток отправителю». Уже принятое не возвращается.');
-    if (preview.kind === 'shortage') lines.push('Нажмите «Подтвердить недостачу». Нужна причина.');
+    if (preview.kind === 'shortage') {
+      lines.push(
+        (preview.reason || '').trim().length >= 3
+          ? 'Нажмите «Подтвердить недостачу».'
+          : 'Нажмите «Подтвердить недостачу». Нужна причина.'
+      );
+    }
   }
   return lines.join('\n');
 }

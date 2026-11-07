@@ -141,6 +141,28 @@ if (!shortageCard.includes('отправлено 3') || !shortageCard.includes('
 if (!shortageCard.includes('в пути 1') || !shortageCard.includes('к списанию 1') || !shortageCard.includes('останется 0')) {
   fail(`shortage card leftover ${shortageCard}`);
 }
+if (shortageCard.includes('Нужна причина')) fail('shortage with reason must not ask for a reason');
+if (!shortageCard.includes('Подтвердить недостачу')) fail('shortage with reason still confirms');
+const shortageNeedReason = buildTransferManageMessage({
+  kind: 'shortage',
+  can_confirm: true,
+  transfer_id: 'id',
+  transfer_number: 'T000011',
+  from_city_name: 'A',
+  to_city_name: 'B',
+  status: 'В пути',
+  created_by_name: null,
+  created_at: null,
+  remaining: 1,
+  items: [],
+  events: [],
+  list: [],
+  empty_list_message: null,
+  reason: null,
+  errors: [],
+  operation_id: 'op',
+});
+if (!shortageNeedReason.includes('Нужна причина')) fail('shortage without reason still needs reason copy');
 if (parseTransferManageIntent('Статус T000005')?.kind !== 'lookup') fail('lookup intent');
 if (parseTransferManageIntent('Покажи перемещения')?.kind !== 'list') fail('list intent');
 if (parseTransferManageIntent('Покажи перемещения')?.listFilter !== 'all') fail('generic list stays unfiltered');
@@ -496,5 +518,8 @@ if (!inspectT7.includes("transfer_number = 'T000007'")) fail('inspect T000007');
 if (!inspectT7.includes('qty_in_transit')) fail('inspect remaining');
 if (!inspectT7.includes('stock_transfer_events')) fail('inspect events');
 if (!inspectT7.includes("metadata->>'kind' = 'transfer_manage'")) fail('inspect assistant card snapshot');
+if (!resolveSrc.includes("preview.reason || '').trim().length >= 3") && !resolveSrc.includes('(preview.reason || "").trim().length >= 3')) {
+  fail('shortage copy must hide reason prompt when reason is present');
+}
 
 console.log('check-assistant-transfer-manage: ok');
