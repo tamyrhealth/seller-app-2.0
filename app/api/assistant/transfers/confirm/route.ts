@@ -16,6 +16,9 @@ function jsonError(status: number, code: string, message: string, retryable = fa
 }
 
 function humanRpcError(message: string): string {
+  if (/Account is inactive/i.test(message)) {
+    return 'Учётная запись отключена.';
+  }
   if (/Transfer permission denied/i.test(message)) {
     return 'Нет права создавать перемещения (can_create_transfers).';
   }
@@ -174,6 +177,7 @@ async function recoverCreatedTransfer(
 async function revalidate(userDb: SupabaseClient, resolved: TransferResolved, actor: {
   role: string | null;
   can_create_transfers: boolean;
+  can_manage_transfers?: boolean;
 }) {
   const [{ data: cities }, { data: products }] = await Promise.all([
     userDb.from('cities').select('id, name, is_active'),
@@ -226,16 +230,28 @@ export async function POST(req: Request) {
   const user = authData?.user;
   if (authErr || !user?.id) return jsonError(401, 'unauthorized', 'Сессия недействительна.');
 
-  const { data: profile } = await userDb
+  let profileQuery = await userDb
     .from('profiles')
-    .select('id, role, is_active, can_create_transfers')
+    .select('id, role, is_active, can_create_transfers, can_manage_transfers')
     .eq('id', user.id)
     .maybeSingle();
+  if (profileQuery.error && /can_manage_transfers/i.test(profileQuery.error.message)) {
+    profileQuery = await userDb
+      .from('profiles')
+      .select('id, role, is_active, can_create_transfers')
+      .eq('id', user.id)
+      .maybeSingle();
+  }
+  const { data: profile } = profileQuery;
   if (!profile || profile.is_active === false) return jsonError(403, 'forbidden', 'Профиль недоступен.');
   if (!isAssistantRole(profile.role)) {
     return jsonError(403, 'forbidden', 'Продавец не имеет доступа к ИИ-ассистенту.');
   }
-  const perm = actorCanCreateTransfer(profile.role as string, profile.can_create_transfers === true);
+  const perm = actorCanCreateTransfer(
+    profile.role as string,
+    profile.can_create_transfers === true,
+    (profile as { can_manage_transfers?: boolean }).can_manage_transfers === true
+  );
   if (!perm.allowed) return jsonError(403, perm.code, perm.message);
 
   let draft: DraftRow | null;
@@ -285,6 +301,7 @@ export async function POST(req: Request) {
   const check = await revalidate(userDb, live.resolved, {
     role: profile.role as string,
     can_create_transfers: profile.can_create_transfers === true,
+    can_manage_transfers: (profile as { can_manage_transfers?: boolean }).can_manage_transfers === true,
   });
   if (!check.can_confirm) {
     const recovered = await recoverCreatedTransfer(userDb, service, user.id, live);

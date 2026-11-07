@@ -12,13 +12,34 @@ import type {
   TransferResolved,
 } from '@/lib/assistant/transferTypes';
 
-export function actorCanCreateTransfer(
+export function actorCanManageTransfers(
   role: string | null | undefined,
-  canCreateTransfers: boolean
+  canManageTransfers: boolean
 ): { allowed: boolean; code: string; message: string } {
   if (role === 'admin') return { allowed: true, code: 'ok', message: '' };
   if (role === 'manager') {
-    if (canCreateTransfers) return { allowed: true, code: 'ok', message: '' };
+    if (canManageTransfers) return { allowed: true, code: 'ok', message: '' };
+    return {
+      allowed: false,
+      code: 'transfer_manage_forbidden',
+      message: 'Управление перемещениями запрещено (can_manage_transfers = false). Можно только создать отправку, если есть can_create_transfers.',
+    };
+  }
+  return {
+    allowed: false,
+    code: 'transfer_manage_forbidden',
+    message: 'Продавец не может управлять перемещениями.',
+  };
+}
+
+export function actorCanCreateTransfer(
+  role: string | null | undefined,
+  canCreateTransfers: boolean,
+  canManageTransfers = false
+): { allowed: boolean; code: string; message: string } {
+  if (role === 'admin') return { allowed: true, code: 'ok', message: '' };
+  if (role === 'manager') {
+    if (canCreateTransfers || canManageTransfers) return { allowed: true, code: 'ok', message: '' };
     return {
       allowed: false,
       code: 'transfer_forbidden',
@@ -166,11 +187,15 @@ function resolveItem(
 export async function resolveTransferDraft(
   db: SupabaseClient,
   intent: TransferIntent,
-  actor: { role: string | null; can_create_transfers: boolean }
+  actor: { role: string | null; can_create_transfers: boolean; can_manage_transfers?: boolean }
 ): Promise<{ content: string; preview: TransferPreviewCard }> {
   const errors: TransferIssue[] = [];
   const warnings: TransferIssue[] = [];
-  const perm = actorCanCreateTransfer(actor.role, actor.can_create_transfers === true);
+  const perm = actorCanCreateTransfer(
+    actor.role,
+    actor.can_create_transfers === true,
+    actor.can_manage_transfers === true
+  );
   if (!perm.allowed) errors.push(issue(perm.code, perm.message));
 
   const [{ data: cityRows }, { data: productRows }] = await Promise.all([
@@ -271,11 +296,15 @@ export function applyTransferEdit(
   fromCityId: string,
   toCityId: string,
   items: { product_id: string; qty: number; raw_name: string }[],
-  actor: { role: string | null; can_create_transfers: boolean }
+  actor: { role: string | null; can_create_transfers: boolean; can_manage_transfers?: boolean }
 ): TransferPreviewCard {
   const errors: TransferIssue[] = [];
   const warnings: TransferIssue[] = [];
-  const perm = actorCanCreateTransfer(actor.role, actor.can_create_transfers === true);
+  const perm = actorCanCreateTransfer(
+    actor.role,
+    actor.can_create_transfers === true,
+    actor.can_manage_transfers === true
+  );
   if (!perm.allowed) errors.push(issue(perm.code, perm.message));
 
   const fromRow = cities.find((c) => c.id === fromCityId) || null;

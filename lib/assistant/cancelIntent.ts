@@ -14,6 +14,7 @@ const ORDER_WORD = /(заказ|тапсырыс|order)/i;
 export function parseCancelIntent(text: string): CancelIntent | null {
   const raw = text.trim();
   if (!raw || NEGATIVE.test(raw)) return null;
+  if (/(перемещен\w*|отправк\w*|t\s*\d+)/i.test(raw) && !ORDER_WORD.test(raw)) return null;
   if (!CANCEL_VERB.test(raw)) return null;
   const numbered = raw.match(/n\s*\d+/i);
   const digitsAfter = raw.match(/(?:заказ|тапсырыс|order)\s*n?\s*(\d{1,8})/i);

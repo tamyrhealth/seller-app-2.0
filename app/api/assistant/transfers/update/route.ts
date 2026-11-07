@@ -51,15 +51,27 @@ export async function POST(req: Request) {
   const { data: authData, error: authErr } = await userDb.auth.getUser(token);
   const user = authData?.user;
   if (authErr || !user?.id) return jsonError(401, 'unauthorized', 'Сессия недействительна.');
-  const { data: profile } = await userDb
+  let profileQuery = await userDb
     .from('profiles')
-    .select('id, role, is_active, can_create_transfers')
+    .select('id, role, is_active, can_create_transfers, can_manage_transfers')
     .eq('id', user.id)
     .maybeSingle();
+  if (profileQuery.error && /can_manage_transfers/i.test(profileQuery.error.message)) {
+    profileQuery = await userDb
+      .from('profiles')
+      .select('id, role, is_active, can_create_transfers')
+      .eq('id', user.id)
+      .maybeSingle();
+  }
+  const { data: profile } = profileQuery;
   if (!profile || profile.is_active === false || !isAssistantRole(profile.role)) {
     return jsonError(403, 'forbidden', 'Продавец не имеет доступа к ИИ-ассистенту.');
   }
-  const perm = actorCanCreateTransfer(profile.role as string, profile.can_create_transfers === true);
+  const perm = actorCanCreateTransfer(
+    profile.role as string,
+    profile.can_create_transfers === true,
+    (profile as { can_manage_transfers?: boolean }).can_manage_transfers === true
+  );
   if (!perm.allowed) return jsonError(403, perm.code, perm.message);
 
   const { data: draft, error: draftErr } = await userDb
@@ -94,7 +106,11 @@ export async function POST(req: Request) {
     body.from_city_id as string,
     body.to_city_id as string,
     mapped,
-    { role: profile.role as string, can_create_transfers: profile.can_create_transfers === true }
+    {
+      role: profile.role as string,
+      can_create_transfers: profile.can_create_transfers === true,
+      can_manage_transfers: (profile as { can_manage_transfers?: boolean }).can_manage_transfers === true,
+    }
   );
 
   let service;

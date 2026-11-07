@@ -119,7 +119,14 @@ export default function TransfersPanel({
   );
 
   const who = useCallback(
-    (id: string | null) => (id ? profilesById.get(id) || id.slice(0, 8) : '—'),
+    (id: string | null) => {
+      if (!id) return '—';
+      const name = profilesById.get(id);
+      const short = id.slice(0, 8);
+      if (!name) return short;
+      const dup = [...profilesById.values()].filter((n) => n === name).length > 1;
+      return dup ? `${name} · ${short}` : name;
+    },
     [profilesById]
   );
 

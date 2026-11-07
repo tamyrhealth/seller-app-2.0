@@ -4,6 +4,7 @@ import { ASSISTANT_USER_MESSAGE_MAX } from '@/lib/assistant/limits';
 import { generateAssistantTurn } from '@/lib/assistant/handleTurn';
 import { parseCancelIntent } from '@/lib/assistant/cancelIntent';
 import { parseTransferIntent } from '@/lib/assistant/transferIntent';
+import { parseTransferManageIntent } from '@/lib/assistant/transferManageIntent';
 import { createServiceClient, createUserClient, readBearerToken } from '@/lib/assistant/supabaseServer';
 
 export const runtime = 'nodejs';
@@ -60,9 +61,16 @@ export async function POST(req: Request) {
 
   let profileQuery = await userDb
     .from('profiles')
-    .select('id, role, is_active, can_cancel_orders, can_create_transfers')
+    .select('id, role, is_active, can_cancel_orders, can_create_transfers, can_manage_transfers')
     .eq('id', user.id)
     .maybeSingle();
+  if (profileQuery.error && /can_manage_transfers/i.test(profileQuery.error.message)) {
+    profileQuery = await userDb
+      .from('profiles')
+      .select('id, role, is_active, can_cancel_orders, can_create_transfers')
+      .eq('id', user.id)
+      .maybeSingle();
+  }
   if (profileQuery.error && /can_create_transfers/i.test(profileQuery.error.message)) {
     profileQuery = await userDb
       .from('profiles')
@@ -123,7 +131,8 @@ export async function POST(req: Request) {
 
   const cancelIntent = parseCancelIntent(storedContent);
   const transferIntent = parseTransferIntent(storedContent);
-  if (!cancelIntent && !transferIntent && !process.env.OPENAI_API_KEY) {
+  const transferManageIntent = parseTransferManageIntent(storedContent);
+  if (!cancelIntent && !transferIntent && !transferManageIntent && !process.env.OPENAI_API_KEY) {
     return jsonError(503, 'missing_openai_key', 'Сервер без OPENAI_API_KEY. Сообщение сохранено, ответ ИИ недоступен.', true);
   }
 
@@ -176,6 +185,7 @@ export async function POST(req: Request) {
       role: profile.role as string,
       can_cancel_orders: profile.can_cancel_orders === true,
       can_create_transfers: (profile as { can_create_transfers?: boolean }).can_create_transfers === true,
+      can_manage_transfers: (profile as { can_manage_transfers?: boolean }).can_manage_transfers === true,
     });
     let text = turn.content;
     if (turn.draft) {
@@ -285,6 +295,19 @@ export async function POST(req: Request) {
             kind: 'cancel_preview',
             state: turn.cancel.can_cancel ? 'preview' : 'blocked',
             preview: turn.cancel,
+          },
+        })
+        .eq('id', assistantMessageId);
+    } else if (turn.transferManage && assistantMessageId) {
+      await service
+        .from('assistant_messages')
+        .update({
+          metadata: {
+            source: 'assistant_transfer_manage',
+            request_id: clientMessageId,
+            kind: 'transfer_manage',
+            state: turn.transferManage.can_confirm ? 'preview' : 'blocked',
+            preview: turn.transferManage,
           },
         })
         .eq('id', assistantMessageId);

@@ -9,9 +9,11 @@ import AssistantMarkdown from '@/components/AssistantMarkdown';
 import AssistantOrderDraftCard from '@/components/AssistantOrderDraftCard';
 import AssistantTransferDraftCard from '@/components/AssistantTransferDraftCard';
 import AssistantCancelCard from '@/components/AssistantCancelCard';
+import AssistantTransferManageCard from '@/components/AssistantTransferManageCard';
 import type { AssistantDraftRow } from '@/lib/assistant/orderDraftTypes';
 import type { AssistantTransferDraftRow } from '@/lib/assistant/transferTypes';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
+import type { TransferManagePreview } from '@/lib/assistant/transferManageTypes';
 import { resolveCancelCardState } from '@/lib/assistant/cancelCardState';
 import { readUserUi, writeUserUi } from '@/lib/uiStorage';
 
@@ -34,7 +36,7 @@ type MsgRow = {
     kind?: string;
     draft_id?: string;
     state?: string;
-    preview?: CancelPreview;
+    preview?: CancelPreview | TransferManagePreview;
     order_id?: string;
     source?: string;
     already_canceled?: boolean;
@@ -48,6 +50,12 @@ function sqlMissing(message: string) {
     message.includes('chat_number') ||
     message.includes('schema cache')
   );
+}
+
+function cancelPreviewOf(meta: MsgRow['metadata']): CancelPreview | undefined {
+  if (meta?.kind !== 'cancel_preview' || !meta.preview) return undefined;
+  if ('order_id' in meta.preview) return meta.preview as CancelPreview;
+  return undefined;
 }
 
 function formatMsgTime(iso: string) {
@@ -248,7 +256,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     const orderIds = [
       ...new Set(
         rows
-          .map((m) => (m.metadata?.kind === 'cancel_preview' ? m.metadata.preview?.order_id : ''))
+          .map((m) => cancelPreviewOf(m.metadata)?.order_id || '')
           .filter((id): id is string => Boolean(id))
       ),
     ];
@@ -272,19 +280,20 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     );
     setMessages(
       rows.map((m) => {
-        if (m.metadata?.kind !== 'cancel_preview' || !m.metadata.preview) return m;
-        const liveRow = live.get(m.metadata.preview.order_id);
-        const historyCanceled = canceledByHistory.has(m.metadata.preview.order_id);
+        const cancelPreview = cancelPreviewOf(m.metadata);
+        if (!cancelPreview) return m;
+        const liveRow = live.get(cancelPreview.order_id);
+        const historyCanceled = canceledByHistory.has(cancelPreview.order_id);
         const state = resolveCancelCardState({
-          storedState: m.metadata.state,
-          preview: m.metadata.preview,
+          storedState: m.metadata?.state,
+          preview: cancelPreview,
           liveStatus: historyCanceled ? 'canceled' : liveRow?.status,
           livePreorderStatus: liveRow?.preorder_status,
         });
         const preview =
           state === 'confirmed'
-            ? { ...m.metadata.preview, status: 'canceled', can_cancel: false }
-            : m.metadata.preview;
+            ? { ...cancelPreview, status: 'canceled', can_cancel: false }
+            : cancelPreview;
         return { ...m, metadata: { ...m.metadata, state, preview } };
       })
     );
@@ -362,6 +371,38 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
         if (first !== 'pending') return;
         await new Promise((resolve) => setTimeout(resolve, 2000));
         await assistantTransferAction('confirm', draftId);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function assistantTransferManage(action: 'confirm' | 'dismiss', messageId: string) {
+    if (readOnly || busy || !openId) return;
+    setBusy(true);
+    try {
+      await runExclusive(`assistant-transfer-manage:${action}:${messageId}`, async () => {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) {
+          setError('Сессия истекла. Войдите снова.');
+          return;
+        }
+        const res = await fetch('/api/assistant/transfers/manage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ chatId: openId, messageId, action }),
+        });
+        const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+        if (!res.ok || payload.ok === false) {
+          setError(payload.message || 'Не удалось выполнить операцию перемещения.');
+          return;
+        }
+        setError('');
+        await reloadMessages(openId);
+        await loadChats();
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сеть недоступна.');
@@ -657,12 +698,24 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                         ) : null}
                         {m.metadata?.kind === 'cancel_preview' && m.metadata.preview ? (
                           <AssistantCancelCard
-                            preview={m.metadata.preview}
+                            preview={m.metadata.preview as CancelPreview}
                             state={m.metadata.state}
                             readOnly={readOnly}
                             busy={busy}
-                            onConfirm={() => void confirmLiveCancel(m.metadata?.preview?.order_id || '', m.id)}
+                            onConfirm={() =>
+                              void confirmLiveCancel((m.metadata?.preview as CancelPreview | undefined)?.order_id || '', m.id)
+                            }
                             onDismiss={() => void dismissCancelCard(m.id)}
+                          />
+                        ) : null}
+                        {m.metadata?.kind === 'transfer_manage' && m.metadata.preview ? (
+                          <AssistantTransferManageCard
+                            preview={m.metadata.preview as TransferManagePreview}
+                            state={m.metadata.state}
+                            readOnly={readOnly}
+                            busy={busy}
+                            onConfirm={() => void assistantTransferManage('confirm', m.id)}
+                            onDismiss={() => void assistantTransferManage('dismiss', m.id)}
                           />
                         ) : null}
                         <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>

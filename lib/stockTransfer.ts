@@ -95,8 +95,12 @@ export function mapTransferRpcError(message: string): string {
   if (message.includes('Received qty exceeds sent qty')) {
     return 'Полученное количество не может быть больше отправленного';
   }
+  if (message.includes('Account is inactive')) return 'Учётная запись отключена';
+  if (message.includes('Transfer manage permission denied')) {
+    return 'Нет права управлять перемещениями (can_manage_transfers)';
+  }
   if (message.includes('Only admin') || message.includes('Transfer permission denied')) {
-    return 'Только администратор может управлять перемещениями';
+    return 'Нет права на эту складскую операцию';
   }
   if (message.includes('Source city is inactive')) return 'Город отправления неактивен';
   if (message.includes('Destination city is inactive')) return 'Город получения неактивен';
