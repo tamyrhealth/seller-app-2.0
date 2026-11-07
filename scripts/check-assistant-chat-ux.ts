@@ -116,10 +116,41 @@ if (chatsUi.includes('ИИ пока не подключён')) fail('offline AI 
 if (!chatsUi.includes('/api/assistant/chat')) fail('UI must call server assistant route');
 if (!chatsUi.includes('Повторить запрос к ИИ')) fail('retry control');
 if (!chatsUi.includes('ИИ отвечает')) fail('loading state');
+if (chatsUi.indexOf('ИИ отвечает') < chatsUi.indexOf('ref={threadRef}')) {
+  fail('loading must render as a left-side bubble inside the thread');
+}
+if (!chatsUi.includes('К новым')) fail('jump-to-latest control');
+if (!chatsUi.includes('showJump')) fail('jump button must follow unread-below state');
+if (!chatsUi.includes('min-h-0') || !chatsUi.includes('overflow-hidden') || !chatsUi.includes('overflow-y-auto')) {
+  fail('chat pane must use a bounded flex height with inner overflow');
+}
+if (!chatsUi.includes('overscroll-contain')) fail('thread overscroll must stay in the pane');
+if (chatsUi.includes('data-scroll-persist="assistant-thread"')) {
+  fail('thread must not restore a mid-history window scroll snapshot');
+}
+if (!chatsUi.includes('К диалогам')) fail('mobile back to chat list');
+if (!chatsUi.includes('safe-area-inset-bottom')) fail('composer must clear the mobile keyboard/home indicator');
+if (!chatsUi.includes('AssistantOrderDraftCard')) fail('order draft cards stay in the thread');
+if (!chatsUi.includes('AssistantTransferDraftCard')) fail('transfer draft cards stay in the thread');
+if (!chatsUi.includes('AssistantCancelCard')) fail('cancel cards stay in the thread');
+if (!chatsUi.includes('AssistantTransferManageCard')) fail('transfer manage cards stay in the thread');
+if (chatsUi.includes('min-h-[360px]')) fail('chat pane must not grow the page with a loose min-height');
 if (!chatsUi.includes('runExclusive')) fail('double-click empty chat must be serialized in UI');
 if (!chatsUi.includes('AssistantMarkdown')) fail('assistant replies must use shared markdown component');
 if (chatsUi.includes('dangerouslySetInnerHTML')) fail('chat UI must not use inner HTML');
 if (chatsUi.includes('rehype-raw')) fail('must not parse raw HTML from the model');
+
+const adminAssistant = readFileSync(join(process.cwd(), 'app', 'admin', 'assistant', 'page.tsx'), 'utf8');
+const managerAssistant = readFileSync(join(process.cwd(), 'app', 'manager', 'assistant', 'page.tsx'), 'utf8');
+if (!adminAssistant.includes('h-dvh') || !managerAssistant.includes('h-dvh')) {
+  fail('assistant pages must lock to the dynamic viewport height');
+}
+if (!adminAssistant.includes('min-h-0') || !managerAssistant.includes('min-h-0')) {
+  fail('assistant pages must pass min-h-0 down to the chat');
+}
+if (!adminAssistant.includes('overflow-hidden') || !managerAssistant.includes('overflow-hidden')) {
+  fail('assistant pages must not scroll the document behind the chat');
+}
 
 const mdUi = readFileSync(join(process.cwd(), 'components', 'AssistantMarkdown.tsx'), 'utf8');
 if (!mdUi.includes('react-markdown')) fail('AssistantMarkdown must use react-markdown');

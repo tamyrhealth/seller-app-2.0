@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabaseClient';
 import { runExclusive } from '@/lib/exclusiveAsync';
@@ -83,6 +83,26 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const NEAR_BOTTOM_PX = 96;
+
+  function isThreadNearBottom(el: HTMLElement) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  }
+
+  function scrollThreadToEnd() {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function syncJumpFromThread() {
+    const el = threadRef.current;
+    if (!el) return;
+    const near = isThreadNearBottom(el);
+    stickToBottomRef.current = near;
+    setShowJump(!near && el.scrollHeight > el.clientHeight + 8);
+  }
   const draftsByChatRef = useRef<Record<string, string>>({});
   const readOnly = audit;
   const sendingRef = useRef(false);
@@ -167,11 +187,18 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     if (chat) setRename(chat.title || '');
   }, [openId, chats]);
 
-  useEffect(() => {
-    const el = threadRef.current;
-    if (!el || !stickToBottomRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages, openId]);
+  useLayoutEffect(() => {
+    if (!openId) {
+      setShowJump(false);
+      return;
+    }
+    if (!stickToBottomRef.current) {
+      syncJumpFromThread();
+      return;
+    }
+    scrollThreadToEnd();
+    setShowJump(false);
+  }, [messages, waitingAi, openId]);
 
   async function createChat() {
     if (!profile?.id || busy || readOnly) return;
@@ -551,6 +578,8 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     if (!content) return;
     const clientMessageId = existing?.clientMessageId || crypto.randomUUID();
     sendingRef.current = true;
+    stickToBottomRef.current = true;
+    setShowJump(false);
     setBusy(true);
     setWaitingAi(true);
     setError('');
@@ -575,20 +604,24 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const openNumber = open ? displayChatNumber(open) : '';
 
   return (
-    <div className="grid gap-4 md:grid-cols-[260px_1fr]">
-      <div>
+    <div className="h-full min-h-0 overflow-hidden flex flex-col md:grid md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] md:gap-3">
+      <div
+        className={`min-h-0 overflow-hidden flex-col ${
+          open ? 'hidden md:flex' : 'flex flex-1'
+        }`}
+      >
         {!readOnly && (
           <button
             type="button"
             onClick={() => void createChat()}
             disabled={busy}
-            className="mb-2 w-full px-3 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50"
+            className="mb-2 shrink-0 w-full px-3 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50"
           >
             Новый диалог
           </button>
         )}
-        {error && <p className="text-sm text-red-700 mb-2">{error}</p>}
-        <ul className="space-y-1">
+        {error && !open ? <p className="text-sm text-red-700 mb-2 shrink-0">{error}</p> : null}
+        <ul className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-1 pr-0.5">
           {chats.map((c) => {
             const num = displayChatNumber(c);
             return (
@@ -597,139 +630,174 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                   type="button"
                   onClick={() => {
                     if (openId) draftsByChatRef.current[openId] = draft;
+                    stickToBottomRef.current = true;
+                    setShowJump(false);
                     setOpenId(c.id);
                     setDraft(draftsByChatRef.current[c.id] || '');
                   }}
-                  className={`w-full text-left px-3 py-2 rounded ${openId === c.id ? 'bg-blue-100' : 'bg-gray-100'}`}
+                  className={`w-full text-left px-3 py-2 rounded-xl ${openId === c.id ? 'bg-blue-100' : 'bg-gray-100'}`}
                 >
                   {num ? <span className="block text-xs font-mono text-gray-600">{num}</span> : null}
-                  <span className="block font-medium text-gray-900">{c.title}</span>
-                  {audit && <span className="block text-xs text-gray-600">{c.owner_name || c.owner_id.slice(0, 8)}</span>}
+                  <span className="block font-medium text-gray-900 truncate">{c.title}</span>
+                  {audit && <span className="block text-xs text-gray-600 truncate">{c.owner_name || c.owner_id.slice(0, 8)}</span>}
                 </button>
               </li>
             );
           })}
         </ul>
       </div>
-      <div className="border border-gray-200 rounded-lg p-3 min-h-[360px] flex flex-col">
+      <div
+        className={`min-h-0 overflow-hidden border border-gray-200 rounded-xl bg-white flex-col ${
+          open ? 'flex flex-1' : 'hidden md:flex md:flex-1'
+        }`}
+      >
         {!open ? (
-          <p className="text-sm text-gray-600">Выберите или создайте диалог. История хранится в базе.</p>
+          <p className="m-4 text-sm text-gray-600">Выберите или создайте диалог. История хранится в базе.</p>
         ) : (
           <>
-            <div className="mb-2">
-              {openNumber ? <p className="text-xs font-mono text-gray-600 mb-1">{openNumber}</p> : null}
-              <div className="flex gap-2">
+            <div className="shrink-0 border-b border-gray-100 px-3 py-2 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (openId) draftsByChatRef.current[openId] = draft;
+                    setOpenId(null);
+                  }}
+                  className="md:hidden shrink-0 px-2 py-1 text-sm text-blue-700"
+                >
+                  К диалогам
+                </button>
+                {openNumber ? <p className="text-xs font-mono text-gray-600 truncate">{openNumber}</p> : null}
+              </div>
+              <div className="flex gap-2 min-w-0">
                 <input
                   value={rename}
                   onChange={(e) => setRename(e.target.value)}
                   disabled={readOnly}
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
+                  className="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900"
                 />
                 {!readOnly && (
-                  <button type="button" onClick={() => void saveTitle()} className="px-3 py-2 bg-gray-200 rounded">
+                  <button type="button" onClick={() => void saveTitle()} className="shrink-0 px-3 py-2 bg-gray-200 rounded-lg">
                     Переименовать
                   </button>
                 )}
               </div>
             </div>
-            {waitingAi ? <p className="text-xs text-blue-800 mb-2">ИИ отвечает…</p> : null}
-            <div
-              ref={threadRef}
-              data-scroll-persist="assistant-thread"
-              onScroll={() => {
-                const el = threadRef.current;
-                if (!el) return;
-                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
-              }}
-              className="flex-1 overflow-y-auto space-y-2 mb-2"
-            >
-              {messages.length === 0 ? (
-                <p className="text-sm text-gray-600">Сообщений нет</p>
-              ) : (
-                messages.map((m) => {
-                  const mine = m.role === 'user';
-                  const card =
-                    !mine
-                      ? drafts.find(
-                          (row) =>
-                            row.assistant_message_id === m.id ||
-                            row.id === m.metadata?.draft_id
-                        )
-                      : undefined;
-                  const transferCard =
-                    !mine
-                      ? transferDrafts.find(
-                          (row) =>
-                            row.assistant_message_id === m.id ||
-                            row.id === m.metadata?.draft_id
-                        )
-                      : undefined;
-                  return (
-                    <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                      <div
-                        className={`max-w-[85%] min-w-0 rounded-2xl px-3 py-2 text-sm ${
-                          mine ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-900'
-                        }`}
-                      >
-                        {mine ? (
-                          <p className="whitespace-pre-wrap break-words">{m.content}</p>
-                        ) : (
-                          <AssistantMarkdown content={m.content} />
-                        )}
-                        {card ? (
-                          <AssistantOrderDraftCard
-                            draft={card}
-                            readOnly={readOnly}
-                            busy={busy}
-                            onConfirm={(id) => void confirmDraft(id)}
-                            onCancel={(id) => void cancelDraft(id)}
-                            onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
-                          />
-                        ) : null}
-                        {transferCard ? (
-                          <AssistantTransferDraftCard
-                            draft={transferCard}
-                            readOnly={readOnly}
-                            busy={busy}
-                            onConfirm={(id) => void confirmTransferDraft(id)}
-                            onCancel={(id) => void cancelTransferDraft(id)}
-                            onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
-                          />
-                        ) : null}
-                        {m.metadata?.kind === 'cancel_preview' && m.metadata.preview ? (
-                          <AssistantCancelCard
-                            preview={m.metadata.preview as CancelPreview}
-                            state={m.metadata.state}
-                            readOnly={readOnly}
-                            busy={busy}
-                            onConfirm={() =>
-                              void confirmLiveCancel((m.metadata?.preview as CancelPreview | undefined)?.order_id || '', m.id)
-                            }
-                            onDismiss={() => void dismissCancelCard(m.id)}
-                          />
-                        ) : null}
-                        {m.metadata?.kind === 'transfer_manage' && m.metadata.preview ? (
-                          <AssistantTransferManageCard
-                            preview={m.metadata.preview as TransferManagePreview}
-                            state={m.metadata.state}
-                            readOnly={readOnly}
-                            busy={busy}
-                            onConfirm={() => void assistantTransferManage('confirm', m.id)}
-                            onDismiss={() => void assistantTransferManage('dismiss', m.id)}
-                          />
-                        ) : null}
-                        <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>
-                          {formatMsgTime(m.created_at)}
-                        </p>
+            <div className="relative flex-1 min-h-0 overflow-hidden">
+              <div
+                ref={threadRef}
+                onScroll={() => syncJumpFromThread()}
+                className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2 overscroll-contain"
+              >
+                {messages.length === 0 && !waitingAi ? (
+                  <p className="text-sm text-gray-600">Сообщений нет</p>
+                ) : (
+                  messages.map((m) => {
+                    const mine = m.role === 'user';
+                    const card =
+                      !mine
+                        ? drafts.find(
+                            (row) =>
+                              row.assistant_message_id === m.id ||
+                              row.id === m.metadata?.draft_id
+                          )
+                        : undefined;
+                    const transferCard =
+                      !mine
+                        ? transferDrafts.find(
+                            (row) =>
+                              row.assistant_message_id === m.id ||
+                              row.id === m.metadata?.draft_id
+                          )
+                        : undefined;
+                    return (
+                      <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[min(100%,36rem)] min-w-0 rounded-2xl px-3 py-2 text-sm ${
+                            mine ? 'ml-8 bg-blue-600 text-white' : 'mr-8 bg-gray-100 text-gray-900'
+                          }`}
+                        >
+                          {mine ? (
+                            <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                          ) : (
+                            <AssistantMarkdown content={m.content} />
+                          )}
+                          {card ? (
+                            <AssistantOrderDraftCard
+                              draft={card}
+                              readOnly={readOnly}
+                              busy={busy}
+                              onConfirm={(id) => void confirmDraft(id)}
+                              onCancel={(id) => void cancelDraft(id)}
+                              onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
+                            />
+                          ) : null}
+                          {transferCard ? (
+                            <AssistantTransferDraftCard
+                              draft={transferCard}
+                              readOnly={readOnly}
+                              busy={busy}
+                              onConfirm={(id) => void confirmTransferDraft(id)}
+                              onCancel={(id) => void cancelTransferDraft(id)}
+                              onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
+                            />
+                          ) : null}
+                          {m.metadata?.kind === 'cancel_preview' && m.metadata.preview ? (
+                            <AssistantCancelCard
+                              preview={m.metadata.preview as CancelPreview}
+                              state={m.metadata.state}
+                              readOnly={readOnly}
+                              busy={busy}
+                              onConfirm={() =>
+                                void confirmLiveCancel((m.metadata?.preview as CancelPreview | undefined)?.order_id || '', m.id)
+                              }
+                              onDismiss={() => void dismissCancelCard(m.id)}
+                            />
+                          ) : null}
+                          {m.metadata?.kind === 'transfer_manage' && m.metadata.preview ? (
+                            <AssistantTransferManageCard
+                              preview={m.metadata.preview as TransferManagePreview}
+                              state={m.metadata.state}
+                              readOnly={readOnly}
+                              busy={busy}
+                              onConfirm={() => void assistantTransferManage('confirm', m.id)}
+                              onDismiss={() => void assistantTransferManage('dismiss', m.id)}
+                            />
+                          ) : null}
+                          <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>
+                            {formatMsgTime(m.created_at)}
+                          </p>
+                        </div>
                       </div>
+                    );
+                  })
+                )}
+                {waitingAi ? (
+                  <div className="flex justify-start">
+                    <div className="mr-8 max-w-[min(100%,36rem)] rounded-2xl bg-gray-100 px-3 py-2 text-sm text-gray-600">
+                      ИИ отвечает…
                     </div>
-                  );
-                })
-              )}
-              <div ref={bottomRef} />
+                  </div>
+                ) : null}
+                <div ref={bottomRef} />
+              </div>
+              {showJump ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    stickToBottomRef.current = true;
+                    setShowJump(false);
+                    scrollThreadToEnd();
+                  }}
+                  className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-3 py-1.5 text-sm text-white shadow"
+                >
+                  К новым
+                </button>
+              ) : null}
             </div>
             {!readOnly && (
-              <div className="space-y-2">
+              <div className="shrink-0 border-t border-gray-100 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2">
+                {error ? <p className="text-sm text-red-700">{error}</p> : null}
                 {retry ? (
                   <button
                     type="button"
@@ -753,9 +821,9 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                         void send();
                       }
                     }}
-                    rows={3}
+                    rows={2}
                     disabled={busy}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded bg-white text-gray-900"
+                    className="min-w-0 flex-1 max-h-32 overflow-y-auto px-3 py-2 border border-gray-300 rounded-xl bg-white text-gray-900 resize-none"
                     placeholder="Сообщение"
                   />
                   <button
