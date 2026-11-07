@@ -9,6 +9,7 @@ import {
   stockQtyForSource,
 } from '../lib/assistant/resolveTransfer';
 import { matchTransferCities } from '../lib/assistant/transferCityMatch';
+import { resolveProductQuery } from '../lib/assistant/productAliases';
 import { qtyValidationError } from '../lib/assistant/qty';
 import { isAssistantRole } from '../lib/roles';
 
@@ -47,6 +48,42 @@ expectTransfer('Алматы → Актау\n100 порошок\n25 чай', 'А
 ]);
 expectTransfer('Отправь из Алматы в Актау 10 пластырь', 'Алматы', 'Актау', [{ name: 'пластырь', qty: 10 }]);
 expectTransfer('Алматыдан Ақтауға 1.25 ұнтақ жібер', 'Алматы', 'Ақтау', [{ name: 'ұнтақ', qty: 1.25 }]);
+expectTransfer(
+  'Создай перемещение со склада Алматы-Офис на склад Актау-Жанбота: Порошок ОРГ 250 г — 1 штука.',
+  'Алматы-Офис',
+  'Актау-Жанбота',
+  [{ name: 'Порошок ОРГ 250 г', qty: 1 }]
+);
+expectTransfer(
+  'Отправь из Алматы-Офис в Актау-Жанбота\nПорошок ОРГ 250 г — 1 штука',
+  'Алматы-Офис',
+  'Актау-Жанбота',
+  [{ name: 'Порошок ОРГ 250 г', qty: 1 }]
+);
+expectTransfer(
+  'со склада Алматы-Офис на склад Актау-Жанбота: Порошок ОРГ 250 г — 1 штука и Чай — 2 шт',
+  'Алматы-Офис',
+  'Актау-Жанбота',
+  [
+    { name: 'Порошок ОРГ 250 г', qty: 1 },
+    { name: 'Чай', qty: 2 },
+  ]
+);
+expectTransfer(
+  'Алматы-Офистен Ақтау-Жанботаға Порошок ОРГ 250 г 1 дана жібер',
+  'Алматы-Офис',
+  'Ақтау-Жанбота',
+  [{ name: 'Порошок ОРГ 250 г', qty: 1 }]
+);
+expectTransfer(
+  'Жөнелт Алматы-Офистен Ақтау-Жанботаға\n1 ұнтақ\n2 шай',
+  'Алматы-Офис',
+  'Ақтау-Жанбота',
+  [
+    { name: 'ұнтақ', qty: 1 },
+    { name: 'шай', qty: 2 },
+  ]
+);
 if (parseTransferIntent('Айгерим Алматы\n10 порошок\nkaspi')) fail('order invoice must not be transfer');
 if (parseTransferIntent('Отмени заказ N000033')) fail('cancel is not transfer');
 if (parseTransferIntent('Где перемещение T000001')) fail('lookup is not create');
@@ -79,6 +116,28 @@ if (!ambiguousFrom.candidates.some((c) => c.id === 'galia') || !ambiguousFrom.ca
 }
 const uniqueTo = chooseTransferCity('Ақтау', almatyWarehouses, 'to');
 if (uniqueTo.id !== 'aktau') fail('Aktau must resolve uniquely');
+
+const namedWarehouses = [
+  { id: 'galia', name: 'Алматы-Ғалия', is_active: true },
+  { id: 'office', name: 'Алматы-Офис', is_active: true },
+  { id: 'zhan', name: 'Актау-Жанбота', is_active: true },
+  { id: 'aktau', name: 'Ақтау', is_active: true },
+];
+const office = chooseTransferCity('Алматы-Офис', namedWarehouses, 'from');
+if (office.id !== 'office') fail(`Алматы-Офис must be unique, got ${office.id}`);
+const zhan = chooseTransferCity('Актау-Жанбота', namedWarehouses, 'to');
+if (zhan.id !== 'zhan') fail(`Актау-Жанбота must be unique, got ${zhan.id}`);
+const stillAmbiguous = chooseTransferCity('Алматы', namedWarehouses, 'from');
+if (stillAmbiguous.id) fail('bare Алматы must stay ambiguous');
+if (stillAmbiguous.candidates.length !== 2) fail('bare Алматы must offer both warehouses');
+
+const powder250 = { id: 'p250', name: 'Порошок ОРГ 250 г', unit: 'pcs', price_retail: 1, is_active: true };
+const powder500 = { id: 'p500', name: 'Порошок ОРГ 500 г', unit: 'pcs', price_retail: 1, is_active: true };
+const exact250 = resolveProductQuery('Порошок ОРГ 250 г', [powder250, powder500]);
+if (exact250.chosen?.id !== 'p250') fail('250 g query must pick the 250 g product, not invent a name');
+const bothPowders = resolveProductQuery('Порошок ОРГ', [powder250, powder500]);
+if (bothPowders.chosen) fail('bare Порошок ОРГ with two sizes must not guess');
+if (bothPowders.candidates.length < 2) fail('bare Порошок ОРГ must offer existing sizes');
 
 if (stockQtyForSource(null, new Map([['p1', 10]]), 'p1') !== null) fail('no stock until source warehouse is chosen');
 if (stockQtyForSource('galia', new Map(), 'p1') !== 0) fail('missing inventory row is 0 only after warehouse chosen');

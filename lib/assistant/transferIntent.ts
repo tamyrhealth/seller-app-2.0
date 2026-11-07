@@ -13,8 +13,13 @@ const LOOKUP =
   /(где|статус|прими|принять|принят|недостач|оформить недостач|спиши недостач|отмени.{0,20}(отправк|перемещ|T\s?\d)|cancel.{0,20}transfer)/i;
 
 const VERB = /(перемест|отправ|жөнелт|жонелт|жібер|жибер|ауыстыр|\btransfer\b)/i;
-const ARROW = /\s*(?:→|->|—|–|>)\s*/;
+const ARROW = /\s*(?:→|->)\s*/;
 const ORDER_HINT = /(накладн|заказ|kaspi|каспи|долг|қарыз|предзаказ|подарок|сыйлық|оплач|төлен)/i;
+const ITEM_HINT =
+  /^(порошок|чай|пластыр|мазь|драже|ұнтақ|унтак|шай|товар|жібер|жибер|отправ|перемест|шт|кг|kg|pcs|дана)/i;
+const CITY_JOIN_STOP = /^(в|на|из|с|со|от|to|from|склад|склада|складе)$/i;
+const COUNT_UNIT = '(?:штук(?:а|и)?|шт|pcs|дана(?:сы)?)';
+const WEIGHT_UNIT = '(?:г|гр|грамм(?:а|ов)?|g|кг|kg|мл|ml)';
 
 const STOP = new Set(
   [
@@ -24,6 +29,7 @@ const STOP = new Set(
     'перемести',
     'перемещение',
     'перемещения',
+    'создай',
     'жібер',
     'жибер',
     'жөнелт',
@@ -34,9 +40,13 @@ const STOP = new Set(
     'кг',
     'kg',
     'pcs',
+    'дана',
     'товар',
     'товара',
     'товары',
+    'склад',
+    'склада',
+    'складе',
   ].map((s) => nameKey(s))
 );
 
@@ -44,6 +54,8 @@ export function stripCityCase(value: string): string {
   return value
     .replace(/^(из|с|от|from)\s+/i, '')
     .replace(/^(в|на|to)\s+/i, '')
+    .replace(/^(со?\s+)?склад[аеу]?\s+/i, '')
+    .replace(/\s+склад[аеу]?$/i, '')
     .replace(/(дан|ден|тан|тен|нан|нен)$/i, '')
     .replace(/(ға|ге|қа|ке)$/i, '')
     .replace(/[.,;:!?]+$/g, '')
@@ -58,76 +70,187 @@ function cleanCity(value: string): string {
   return parts.join(' ').trim();
 }
 
+function cleanProductName(value: string): string {
+  const stripped = value
+    .replace(VERB, ' ')
+    .replace(/^[.,;:!?—–-]+\s*/g, '')
+    .replace(/\s*[.,;:!?—–-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped
+    .split(/\s+/)
+    .filter((p) => !STOP.has(nameKey(p)))
+    .join(' ')
+    .trim();
+}
+
 function parseQty(raw: string): number {
   const n = Number(String(raw).replace(',', '.'));
   return Number.isFinite(n) ? n : NaN;
 }
 
-function extractCityPair(text: string): { from: string; to: string } | null {
+function startsWithWeightUnit(value: string): boolean {
+  return new RegExp(`^${WEIGHT_UNIT}\\b`, 'i').test(value.trim());
+}
+
+function readCityName(value: string): { name: string; rest: string } | null {
+  const t = value.replace(/^[\s,.:;]+/, '').trim();
+  if (!t) return null;
+  const hyphen = /^([\p{L}0-9]+(?:-[\p{L}0-9]+)+)/u.exec(t);
+  if (hyphen) {
+    return { name: cleanCity(hyphen[1]), rest: t.slice(hyphen[0].length) };
+  }
+  const first = /^([\p{L}0-9]+)/u.exec(t);
+  if (!first) return null;
+  let name = first[1];
+  let rest = t.slice(first[0].length);
+  const second = /^\s+([\p{L}0-9]+)/u.exec(rest);
+  if (
+    second &&
+    !ITEM_HINT.test(second[1]) &&
+    !CITY_JOIN_STOP.test(second[1]) &&
+    !/^\d/.test(second[1]) &&
+    !STOP.has(nameKey(second[1]))
+  ) {
+    name = `${name} ${second[1]}`;
+    rest = rest.slice(second[0].length);
+  }
+  const cleaned = cleanCity(name);
+  return cleaned ? { name: cleaned, rest } : null;
+}
+
+type CityPair = { from: string; to: string; rest: string };
+
+function pairFromNames(fromRaw: string, toRaw: string, rest: string): CityPair | null {
+  const from = cleanCity(fromRaw);
+  const to = cleanCity(toRaw);
+  if (!from || !to) return null;
+  return { from, to, rest: rest.replace(/^[\s,:;]+/, '').trim() };
+}
+
+function extractPrefixedPair(text: string): CityPair | null {
+  const fromPre = /(?:^|[\s,])(?:со?\s+склада|из\s+склада|from(?:\s+the)?(?:\s+warehouse)?|из|с(?!клад))\s+/gi;
+  let fromHit: RegExpExecArray | null;
+  while ((fromHit = fromPre.exec(text))) {
+    const afterFrom = text.slice(fromHit.index + fromHit[0].length);
+    const fromCity = readCityName(afterFrom);
+    if (!fromCity) continue;
+    const toPre = /^(?:\s*)(?:на\s+склад(?:а|е)?|в\s+склад(?:а|е)?|to(?:\s+the)?(?:\s+warehouse)?|на|в)\s+/i.exec(
+      fromCity.rest
+    );
+    if (!toPre) continue;
+    const toCity = readCityName(fromCity.rest.slice(toPre[0].length));
+    if (!toCity) continue;
+    const before = text.slice(0, fromHit.index);
+    const rest = `${toCity.rest}\n${before}`.trim();
+    const pair = pairFromNames(fromCity.name, toCity.name, rest);
+    if (pair) return pair;
+  }
+  return null;
+}
+
+function extractArrowPair(text: string): CityPair | null {
   const lines = text.split(/\n/).map((s) => s.trim()).filter(Boolean);
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     if (!ARROW.test(line)) continue;
-    const [left, right] = line.split(ARROW);
-    const from = cleanCity(left || '');
-    const to = cleanCity(right || '');
-    if (from && to) return { from, to };
+    const [left, right] = line.split(ARROW, 2);
+    const fromCity = readCityName(left || '');
+    const toCity = readCityName(right || '');
+    if (!fromCity || !toCity) continue;
+    const rest = [toCity.rest, ...lines.slice(0, i), ...lines.slice(i + 1)].join('\n').trim();
+    const pair = pairFromNames(fromCity.name, toCity.name, rest);
+    if (pair) return pair;
+  }
+  return null;
+}
+
+function extractEnglishPair(text: string): CityPair | null {
+  const en = /\bfrom\s+/i.exec(text);
+  if (!en) return null;
+  const fromCity = readCityName(text.slice(en.index + en[0].length));
+  if (!fromCity) return null;
+  const toPre = /^\s*to\s+/i.exec(fromCity.rest);
+  if (!toPre) return null;
+  const toCity = readCityName(fromCity.rest.slice(toPre[0].length));
+  if (!toCity) return null;
+  return pairFromNames(fromCity.name, toCity.name, toCity.rest);
+}
+
+function extractKazakhPair(text: string): CityPair | null {
+  const kz =
+    /([\p{L}0-9]+(?:-[\p{L}0-9]+)*(?:дан|ден|тан|тен|нан|нен))\s+([\p{L}0-9]+(?:-[\p{L}0-9]+)*(?:ға|ге|қа|ке))/iu.exec(
+      text
+    );
+  if (!kz) return null;
+  const rest = `${text.slice(0, kz.index)} ${text.slice(kz.index + kz[0].length)}`;
+  return pairFromNames(kz[1], kz[2], rest);
+}
+
+function extractCityPair(text: string): CityPair | null {
+  return extractPrefixedPair(text) || extractArrowPair(text) || extractEnglishPair(text) || extractKazakhPair(text);
+}
+
+function splitItemChunks(text: string): string[] {
+  return text
+    .split(/\n|,|;| и | және /i)
+    .map((s) => s.replace(/[—–]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function parseItemChunk(chunk: string, skip: Set<string>): TransferParsedItem | null {
+  const raw = chunk
+    .replace(/[—–]/g, ' ')
+    .replace(VERB, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!raw) return null;
+
+  const qtyFirst = new RegExp(`^(\\d+(?:[.,]\\d+)?)(?:\\s*${COUNT_UNIT})?\\s+(.+)$`, 'i').exec(raw);
+  if (qtyFirst && !startsWithWeightUnit(qtyFirst[2])) {
+    const qty = parseQty(qtyFirst[1]);
+    const name = cleanProductName(qtyFirst[2]);
+    if (Number.isFinite(qty) && qty > 0 && name && !skip.has(nameKey(name))) {
+      return { raw_name: name, qty };
+    }
   }
 
-  const ru = /(?:из|с)\s+([^\d\n]+?)\s+(?:в|на)\s+([^\d\n]+?)(?=\s+\d|[.,;]|$|\n)/i.exec(text);
-  if (ru) {
-    const from = cleanCity(ru[1]);
-    const to = cleanCity(ru[2]);
-    if (from && to) return { from, to };
+  const qtyLastUnit = new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*${COUNT_UNIT}\\.?$`, 'i').exec(raw);
+  if (qtyLastUnit) {
+    const qty = parseQty(qtyLastUnit[2]);
+    const name = cleanProductName(qtyLastUnit[1]);
+    if (Number.isFinite(qty) && qty > 0 && name && !skip.has(nameKey(name))) {
+      return { raw_name: name, qty };
+    }
   }
 
-  const en = /\bfrom\s+([^\d\n]+?)\s+to\s+([^\d\n]+?)(?=\s+\d|[.,;]|$|\n)/i.exec(text);
-  if (en) {
-    const from = cleanCity(en[1]);
-    const to = cleanCity(en[2]);
-    if (from && to) return { from, to };
-  }
-
-  const kz = /([^\s,]+(?:дан|ден|тан|тен|нан|нен))\s+([^\s,]+(?:ға|ге|қа|ке))/i.exec(text);
-  if (kz) {
-    const from = cleanCity(kz[1]);
-    const to = cleanCity(kz[2]);
-    if (from && to) return { from, to };
+  const qtyLast = /^(.+?)\s+(\d+(?:[.,]\d+)?)\.?$/i.exec(raw);
+  if (qtyLast && !new RegExp(`${WEIGHT_UNIT}$`, 'i').test(qtyLast[1].trim())) {
+    const qty = parseQty(qtyLast[2]);
+    const name = cleanProductName(qtyLast[1]);
+    if (Number.isFinite(qty) && qty > 0 && name && !skip.has(nameKey(name))) {
+      return { raw_name: name, qty };
+    }
   }
 
   return null;
 }
 
-function extractItems(text: string, pair: { from: string; to: string }): TransferParsedItem[] {
+function extractItems(text: string, pair: CityPair): TransferParsedItem[] {
   const skip = new Set([nameKey(pair.from), nameKey(pair.to)]);
+  const sources = pair.rest.trim() ? [pair.rest] : [text];
   const items: TransferParsedItem[] = [];
-  const lines = text.split(/\n/).map((s) => s.trim()).filter(Boolean);
-
-  for (const line of lines) {
-    if (ARROW.test(line) && !/\d/.test(line)) continue;
-    if (/(?:из|с)\s+.+\s+(?:в|на)\s+/i.test(line) && !/\d/.test(line)) continue;
-    const qtyFirst = /^(\d+(?:[.,]\d+)?)\s+(.+)$/.exec(line);
-    const qtyLast = /^(.+?)\s+(\d+(?:[.,]\d+)?)\s*(?:шт|кг|kg|pcs)?$/i.exec(line);
-    const hit = qtyFirst || qtyLast;
-    if (!hit) continue;
-    const qty = parseQty(qtyFirst ? hit[1] : hit[2]);
-    const raw = cleanCity(qtyFirst ? hit[2] : hit[1]);
-    if (!Number.isFinite(qty) || qty <= 0 || !raw) continue;
-    if (skip.has(nameKey(raw))) continue;
-    items.push({ raw_name: raw, qty });
-  }
-
-  if (items.length) return items;
-
-  const inline = text.replace(/\n/g, ' ');
-  const re = /(\d+(?:[.,]\d+)?)\s+([^,;]+?)(?=(?:,|;| и | және |\s+жібер|\s+жибер|\s+отправ|\s+перемест|$))/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(inline))) {
-    const qty = parseQty(m[1]);
-    const raw = cleanCity(m[2]);
-    if (!Number.isFinite(qty) || qty <= 0 || !raw) continue;
-    if (skip.has(nameKey(raw))) continue;
-    if (!/[а-яёәғқңөұүһіa-z]{2,}/i.test(raw)) continue;
-    items.push({ raw_name: raw, qty });
+  const seen = new Set<string>();
+  for (const source of sources) {
+    for (const chunk of splitItemChunks(source)) {
+      if (ARROW.test(chunk) && !/\d/.test(chunk)) continue;
+      const item = parseItemChunk(chunk, skip);
+      if (!item) continue;
+      const key = `${nameKey(item.raw_name)}:${item.qty}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+    }
   }
   return items;
 }
