@@ -43,9 +43,26 @@ function stripTransferClause(value: string): string {
     .trim();
 }
 
+const REASON_LABEL = String.raw`(?:причин\p{L}*|себебі|себеп(?:і)?|reason)`;
+
+export function splitShortageReason(text: string): { body: string; reason: string | null } {
+  const re = new RegExp(`(?:^|[\\s.,;])${REASON_LABEL}\\s*[:\\-–—]?\\s+`, 'giu');
+  let last: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) last = match;
+  if (!last) return { body: text.trim(), reason: null };
+  const reason = text
+    .slice(last.index + last[0].length)
+    .replace(/^[.,;:\s]+|[.,;:\s]+$/g, '')
+    .trim();
+  const body = text.slice(0, last.index).replace(/[.,;:\s]+$/g, '').trim();
+  return { body, reason: reason || null };
+}
+
 function cleanItemName(value: string): string {
   return stripTransferClause(value)
-    .replace(/^(прими|принять|принят\p{L}*|получи|получить|қабылда\p{L}*|верни|отмени|недостач\p{L}*)\s+/iu, '')
+    .replace(new RegExp(`\\s+${REASON_LABEL}\\b[\\s\\S]*$`, 'iu'), '')
+    .replace(/^(прими|принять|принят\p{L}*|получи|получить|қабылда\p{L}*|верни|отмени|недостач\p{L}*|оформи)\s+/iu, '')
     .replace(/\s+(из|в|на|қабылда\p{L}*|прими|получи)$/iu, '')
     .replace(/[.,;:!?—–]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -92,12 +109,7 @@ export function extractTransferManageItems(text: string): TransferManageParsedIt
 }
 
 function extractReason(text: string): string | null {
-  const labeled = /(?:причин\S*|reason)\s*[:\-–]?\s*(.+)$/i.exec(text.replace(/\n/g, ' '));
-  if (labeled) {
-    const reason = labeled[1].replace(/t\s*0*\d+/gi, '').trim();
-    return reason || null;
-  }
-  return null;
+  return splitShortageReason(text).reason;
 }
 
 export function parseTransferManageIntent(text: string): TransferManageIntent | null {
@@ -109,7 +121,7 @@ export function parseTransferManageIntent(text: string): TransferManageIntent | 
   const receive = /(прими|принять|принят|получи|получить|қабылда)/i.test(raw);
   const ret =
     /(верн\S*\s+остат|верни.{0,30}отправител|отмени.{0,24}(отправк|перемещ)|cancel.{0,20}transfer)/i.test(raw);
-  const shortage = /(недостач|спиши недостач|оформи недостач|write.?off)/i.test(raw);
+  const shortage = /(недостач|спиши недостач|оформи недостач|жетіспеу|write.?off)/i.test(raw);
   const lookupWord = /(где|статус|покажи|история|список|что с)/i.test(raw);
   const transferWord = /(перемещен\w*|отправк\w*|\btransfer\b)/i.test(raw);
   const inTransitList =
@@ -129,19 +141,12 @@ export function parseTransferManageIntent(text: string): TransferManageIntent | 
   else if (lookupWord && transferWord) kind = 'list';
   else return null;
 
+  const split = splitShortageReason(raw);
   return {
     kind,
     transferNumber,
-    items: extractTransferManageItems(raw),
-    reason:
-      extractReason(raw) ||
-      (shortage
-        ? raw
-            .replace(/t\s*0*\d+/gi, '')
-            .replace(/(недостач\S*|прими|принят\S*|получи\S*|перемещен\S*|отправк\S*)/gi, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-        : null),
+    items: extractTransferManageItems(split.body),
+    reason: shortage ? split.reason : extractReason(raw),
     listFilter: kind === 'list' && inTransitList ? 'in_transit' : 'all',
     mineOnly: kind === 'list' && mineOnly,
     previewOnly,

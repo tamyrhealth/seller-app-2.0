@@ -43,6 +43,104 @@ if (parseTransferManageIntent('Прими T000005')?.kind !== 'receive') fail('r
 if (parseTransferManageIntent('Верни остаток T000005')?.kind !== 'return_remainder') fail('return intent');
 if (parseTransferManageIntent('Недостача T000005 причина: бой')?.kind !== 'shortage') fail('shortage intent');
 if (parseTransferManageIntent('Недостача T000005 причина: бой')?.reason !== 'бой') fail('shortage reason');
+const shortageExact = parseTransferManageIntent(
+  'Оформи недостачу 1 штуки порошка ОРГ 250 г по перемещению T000011. Причина: потеря при перевозке.'
+);
+if (shortageExact?.kind !== 'shortage') fail('shortage T000011 kind');
+if (shortageExact?.transferNumber !== 'T000011') fail('shortage T000011 number');
+if (shortageExact?.items.length !== 1 || shortageExact.items[0].qty !== 1) {
+  fail(`shortage qty must be 1, got ${JSON.stringify(shortageExact?.items)}`);
+}
+if (/причин|потер|перевоз|себеб/i.test(shortageExact.items[0].raw_name)) {
+  fail(`reason leaked into shortage name: ${shortageExact.items[0].raw_name}`);
+}
+if (!/порош/i.test(shortageExact.items[0].raw_name) || !/250/i.test(shortageExact.items[0].raw_name)) {
+  fail(`shortage name must stay powder 250g, got ${shortageExact.items[0].raw_name}`);
+}
+if (shortageExact.reason !== 'потеря при перевозке') {
+  fail(`shortage reason got ${JSON.stringify(shortageExact.reason)}`);
+}
+if (
+  matchTransferCatalogProduct(shortageExact.items[0].raw_name, [
+    { id: 'p250', name: 'ПОРОШОК ОРГ 250г', unit: 'pcs', price_retail: 1, is_active: true },
+  ]).chosen?.id !== 'p250'
+) {
+  fail('shortage powder must match ПОРОШОК ОРГ 250г');
+}
+if (assignManageActionQty({ kind: 'shortage', remaining: 1, matchedQty: 1, takeAllRemaining: false }) !== 1) {
+  fail('shortage 1 of remaining 1');
+}
+const dashReason = parseTransferManageIntent(
+  'Оформи недостачу 1 штуки порошка ОРГ 250 г по перемещению T000011.\nПричина — потеря при перевозке'
+);
+if (dashReason?.reason !== 'потеря при перевозке') fail(`dash/newline reason ${JSON.stringify(dashReason?.reason)}`);
+if (parseTransferManageIntent('Недостача 1 дана ұнтақ ОРГ 250 г T000011. Себебі: жолда жоғалды.')?.reason !== 'жолда жоғалды') {
+  fail('kz себебі reason');
+}
+if (parseTransferManageIntent('Недостача 1 дана ұнтақ ОРГ 250 г T000011. Себеп: жолда жоғалды.')?.reason !== 'жолда жоғалды') {
+  fail('kz себеп reason');
+}
+const twoShortage = parseTransferManageIntent(
+  'Недостача 1 порошка ОРГ 250 г и 1 чай по перемещению T000011. Причина: бой'
+);
+if (twoShortage?.items.length !== 2 || twoShortage.items.some((item) => /причин|бой/i.test(item.raw_name))) {
+  fail(`two-item shortage ${JSON.stringify(twoShortage?.items)}`);
+}
+if (
+  !collectTransferManageActionErrors({
+    kind: 'shortage',
+    remaining: 1,
+    items: [{ name: 'ПОРОШОК ОРГ 250г', action_qty: 2, remaining: 1 }],
+    reason: 'потеря при перевозке',
+  }).some((e) => e.code === 'qty_exceeds')
+) {
+  fail('shortage above remaining must block');
+}
+if (
+  !collectTransferManageActionErrors({
+    kind: 'shortage',
+    remaining: 0,
+    items: [{ name: 'ПОРОШОК ОРГ 250г', action_qty: 1, remaining: 0 }],
+    reason: 'потеря при перевозке',
+  }).some((e) => e.code === 'nothing_remaining' && /повторно/i.test(e.message))
+) {
+  fail('repeat shortage write-off must block');
+}
+const shortageCard = buildTransferManageMessage({
+  kind: 'shortage',
+  can_confirm: true,
+  transfer_id: 'id',
+  transfer_number: 'T000011',
+  from_city_name: 'A',
+  to_city_name: 'B',
+  status: 'В пути',
+  created_by_name: null,
+  created_at: null,
+  remaining: 1,
+  items: [
+    {
+      product_id: 'p250',
+      name: 'ПОРОШОК ОРГ 250г',
+      unit: 'pcs',
+      qty_sent: 3,
+      qty_received: 2,
+      qty_returned: 0,
+      qty_lost: 0,
+      remaining: 1,
+      action_qty: 1,
+    },
+  ],
+  events: [],
+  list: [],
+  empty_list_message: null,
+  reason: 'потеря при перевозке',
+  errors: [],
+  operation_id: 'op',
+});
+if (!shortageCard.includes('отправлено 3') || !shortageCard.includes('принято 2')) fail('shortage card sent/received');
+if (!shortageCard.includes('в пути 1') || !shortageCard.includes('к списанию 1') || !shortageCard.includes('останется 0')) {
+  fail(`shortage card leftover ${shortageCard}`);
+}
 if (parseTransferManageIntent('Статус T000005')?.kind !== 'lookup') fail('lookup intent');
 if (parseTransferManageIntent('Покажи перемещения')?.kind !== 'list') fail('list intent');
 if (parseTransferManageIntent('Покажи перемещения')?.listFilter !== 'all') fail('generic list stays unfiltered');
@@ -379,6 +477,9 @@ if (!resolveSrc.includes('!intent.previewOnly')) fail('informational receive mus
 if (!resolveSrc.includes('remaining > 0')) fail('can_confirm requires remaining in transit');
 if (!resolveSrc.includes('matchTransferCatalogProduct')) fail('transfer lines must use declension-tolerant product match');
 if (!resolveSrc.includes('skipQtyPrompt')) fail('product mismatch must not look like missing qty');
+if (!read('lib/assistant/transferManageIntent.ts').includes('splitShortageReason')) {
+  fail('shortage must split reason from product name');
+}
 if (!resolveSrc.includes('assignManageActionQty')) fail('receive qty must come from assignManageActionQty');
 if (!resolveSrc.includes('takeAllRemaining')) fail('full remaining only when explicitly requested');
 if (!manage.includes('fetchTransferManageLive')) fail('confirm must reload live transfer into the card');
