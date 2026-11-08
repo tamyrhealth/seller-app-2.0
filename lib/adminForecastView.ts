@@ -1,17 +1,16 @@
 import {
+  forecastRateWindowLabel,
+  formatForecastQty,
+  formatForecastRate,
   type ForecastConfidence,
   type ForecastOrder,
   type ForecastWindow,
 } from '@/lib/adminForecast';
-import { formatQtyValue } from '@/lib/adminStats';
 import { addDaysYmd, formatYmdDmy, getTodayLocalISO, getYmdSpanRangeInTz } from '@/lib/datetime';
 import { ORDER_STATS_MAX, ORDER_STATS_PAGE, ORDER_STATS_SELECT } from '@/lib/fetchAdminStatsOrders';
 import { supabase } from '@/lib/supabaseClient';
 
-export function formatForecastQty(qty: number | null, unit: string, complete = true): string {
-  if (!complete || qty == null || Number.isNaN(qty)) return '—';
-  return formatQtyValue(qty, unit);
-}
+export { forecastRateWindowLabel, formatForecastQty, formatForecastRate };
 
 export function formatForecastDays(days: number | null, complete: boolean): string {
   if (!complete || days == null || !Number.isFinite(days)) return '—';

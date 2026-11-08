@@ -8,8 +8,11 @@ import {
   isPendingPreorder,
   mergeForecastOrders,
   parseForecastParams,
+  recRateOf,
   recommendQty,
   targetBelowLeadSafety,
+  formatForecastQty,
+  formatForecastRate,
   type ForecastOrder,
 } from '../lib/adminForecast';
 
@@ -178,7 +181,27 @@ if (!neg.cityRows[0].negativeStock || neg.cityRows[0].available !== 0) fail('neg
 if (neg.negativeStockCount !== 1) fail('negative counter');
 
 const zero = report([], { inventory: [{ city_id: 'c1', product_id: 'p1', qty_on_hand: 8 }] });
-if (zero.cityRows[0].confidence !== 'low' || zero.cityRows[0].recRate !== 0) fail('zero sales low confidence');
+if (zero.cityRows[0].confidence !== 'low' || zero.cityRows[0].recRate !== 0 || zero.cityRows[0].recRateWindow !== null) {
+  fail('zero sales low confidence');
+}
+
+const fallback90 = recRateOf(0, 0, 2);
+if (Math.abs(fallback90.recRate - 2 / 90) > 1e-9 || fallback90.recRateWindow !== 90) fail('0 sales in 30d uses explicit 90d rate');
+const oldOnly = report([order({ id: 'o-old', created_at: '2026-09-15T06:00:00.000Z', order_items: [item('p1', 2)] })]);
+if (oldOnly.cityRows[0].qty30 !== 0) fail('sale 31-90d is outside 30d');
+if (oldOnly.cityRows[0].qty90 !== 2) fail('sale 31-90d is in 90d');
+if (oldOnly.cityRows[0].recRateWindow !== 90) fail('must expose 90d fallback window');
+if (Math.abs(oldOnly.cityRows[0].recRate - 2 / 90) > 1e-9) fail('fallback rate is qty90/90 not qty30/30');
+const oldOnly7 = report([order({ id: 'o-old7', created_at: '2026-09-15T06:00:00.000Z', order_items: [item('p1', 2)] })], {
+  window: 7,
+});
+if (oldOnly7.cityRows[0].recRate !== oldOnly.cityRows[0].recRate || oldOnly7.cityRows[0].recRateWindow !== 90) {
+  fail('period buttons must not silently change purchase rate');
+}
+if (formatForecastRate(2 / 90) !== '0.022') fail('rate display max 3 decimals');
+if (formatForecastQty(2.4, 'pcs') !== '2 шт.') fail('pcs display is integer');
+if (formatForecastQty(1.251, 'kg') !== '1.251 кг') fail('kg display keeps needed precision');
+if (Math.abs(oldOnly.cityRows[0].recRate - 2 / 90) > 1e-9) fail('display rounding must not change recRate');
 
 if (recommendQty(1.251, 'kg') !== 1.251) fail('kg keeps decimals');
 if (recommendQty(1.2, 'pcs') !== 2) fail('pcs ceils');
@@ -328,6 +351,7 @@ if (!page.includes('let cancelled = false')) fail('cancel load');
 if (!page.includes('[refreshKey, authReady, isAdmin]')) fail('stable load deps');
 if (page.includes(', t]')) fail('language must not refetch');
 if (!page.includes('bg-slate-50') || !page.includes('overflow-x-auto')) fail('layout');
+if (!page.includes('forecastRateWindowLabel') || !page.includes('formatForecastRate')) fail('must show actual rate window');
 if (!nav.includes('href="/admin/forecast"')) fail('nav');
 if (managerNav.includes('/admin/forecast') || sellerNav.includes('/admin/forecast')) fail('staff nav leak');
 if (!i18n.includes("'forecast.nav': 'Прогноз'") || !i18n.includes("'forecast.nav': 'Болжам'")) fail('i18n nav');

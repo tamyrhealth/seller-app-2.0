@@ -1,7 +1,9 @@
+import { formatUnit } from '@/lib/adminStats';
 import { addDaysYmd, getTodayLocalISO, getYmdSpanRangeInTz } from '@/lib/datetime';
 import { transferRemaining } from '@/lib/stockTransfer';
 
 export type ForecastWindow = 7 | 30 | 90;
+export type ForecastRateWindow = ForecastWindow | null;
 export type ForecastConfidence = 'high' | 'medium' | 'low';
 
 export type ForecastOrderItem = {
@@ -78,6 +80,7 @@ export type ForecastCityRow = {
   analysisQty: number;
   analysisRate: number;
   recRate: number;
+  recRateWindow: ForecastRateWindow;
   spike: boolean;
   onHand: number;
   reserve: number;
@@ -146,6 +149,33 @@ const TZ = 'Asia/Almaty';
 
 export function qty3(n: number): number {
   return Math.round((Number(n) || 0) * 1000) / 1000;
+}
+
+function isWeightOrVolume(unit: string): boolean {
+  return unit === 'kg' || unit === 'l' || unit === 'g' || unit === 'ml';
+}
+
+/** Только отображение. Внутренние qty не округляются. */
+export function formatForecastQty(qty: number | null, unit: string, complete = true): string {
+  if (!complete || qty == null || Number.isNaN(qty)) return '—';
+  const label = formatUnit(unit);
+  if (isWeightOrVolume(unit)) {
+    return `${Number(qty.toFixed(3)).toString()} ${label}`;
+  }
+  return `${Math.round(qty)} ${label}`;
+}
+
+/** Скорость: не больше 3 знаков, без подмены единиц. */
+export function formatForecastRate(rate: number | null, complete = true): string {
+  if (!complete || rate == null || Number.isNaN(rate)) return '—';
+  return Number(rate.toFixed(3)).toString();
+}
+
+export function forecastRateWindowLabel(window: ForecastRateWindow, t: (key: string) => string): string {
+  if (window === 7) return t('forecast.rateFrom7');
+  if (window === 30) return t('forecast.rateFrom30');
+  if (window === 90) return t('forecast.rateFrom90');
+  return t('forecast.rateFromNone');
 }
 
 export function recommendQty(qty: number, unit: string): number {
@@ -254,16 +284,21 @@ function inboundRemaining(transfer: ForecastTransfer, item: ForecastTransferItem
   );
 }
 
-function recRateOf(qty7: number, qty30: number, qty90: number): { recRate: number; spike: boolean } {
+/** Закупка: 30 дней; всплеск 7д не раздувает; нет продаж за 30д — 90д, не выбранная кнопка периода. */
+export function recRateOf(
+  qty7: number,
+  qty30: number,
+  qty90: number
+): { recRate: number; spike: boolean; recRateWindow: ForecastRateWindow } {
   const rate7 = qty7 / 7;
   const rate30 = qty30 / 30;
   const rate90 = qty90 / 90;
   const spike = rate30 > 0 && rate7 > rate30 * SPIKE_RATIO;
-  if (spike) return { recRate: rate30, spike: true };
-  if (qty30 > 0) return { recRate: rate30, spike: false };
-  if (qty90 > 0) return { recRate: rate90, spike: false };
-  if (qty7 > 0) return { recRate: rate7, spike: false };
-  return { recRate: 0, spike: false };
+  if (spike) return { recRate: rate30, spike: true, recRateWindow: 30 };
+  if (qty30 > 0) return { recRate: rate30, spike: false, recRateWindow: 30 };
+  if (qty90 > 0) return { recRate: rate90, spike: false, recRateWindow: 90 };
+  if (qty7 > 0) return { recRate: rate7, spike: false, recRateWindow: 7 };
+  return { recRate: 0, spike: false, recRateWindow: null };
 }
 
 function confidenceOf(opts: {
@@ -408,7 +443,7 @@ export function buildAdminForecast(input: {
   const cityRows: ForecastCityRow[] = [];
   for (const [k, row] of acc) {
     const [productId, cityId] = k.split('\0');
-    const { recRate, spike } = recRateOf(row.qty7, row.qty30, row.qty90);
+    const { recRate, spike, recRateWindow } = recRateOf(row.qty7, row.qty30, row.qty90);
     const available = qty3(Math.max(0, row.onHand - row.reserve));
     const analysisQty = input.window === 7 ? row.qty7 : input.window === 90 ? row.qty90 : row.qty30;
     const analysisRate = analysisQty / input.window;
@@ -435,6 +470,7 @@ export function buildAdminForecast(input: {
       analysisQty,
       analysisRate,
       recRate,
+      recRateWindow,
       spike,
       onHand: row.onHand,
       reserve: row.reserve,
