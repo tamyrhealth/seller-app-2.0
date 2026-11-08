@@ -13,7 +13,7 @@ import {
 } from '@/lib/adminCustomers';
 import { formatCustomerKpi, resolveCustomerRange, type CustomerPeriodMode } from '@/lib/adminCustomersView';
 import { fetchAllCustomerOrders } from '@/lib/fetchAdminCustomerOrders';
-import { getTodayLocalISO, ymdInTz } from '@/lib/datetime';
+import { formatInstantDmy, getTodayLocalISO } from '@/lib/datetime';
 import { runExclusive } from '@/lib/exclusiveAsync';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
@@ -22,11 +22,19 @@ function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
 }
 
-function formatWhen(iso: string | null) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return ymdInTz(d, 'Asia/Almaty');
+function paymentCopy(
+  row: { isCanceled: boolean; unpaidDebt: boolean; isDebt: boolean; paymentType: string | null },
+  t: (key: string) => string
+): string {
+  if (row.isCanceled) return t('common.canceled');
+  if (row.unpaidDebt || row.isDebt) return t('common.debt');
+  const type = String(row.paymentType || '').toLowerCase();
+  if (type === 'cash') return t('common.cash');
+  if (type === 'kaspi') return t('common.kaspi');
+  if (type === 'card') return t('common.card');
+  if (type === 'transfer') return t('common.transfer');
+  if (type === 'debt') return t('common.debt');
+  return row.paymentType || '—';
 }
 
 function KpiCard({
@@ -164,6 +172,20 @@ export default function AdminCustomersPage() {
       cancelled = true;
     };
   }, [refreshKey]);
+
+  useEffect(() => {
+    if (!openPhone) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenPhone(null);
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [openPhone]);
 
   const cityNames = useMemo(() => new Map(cities.map((c) => [c.id, c.name])), [cities]);
 
@@ -419,23 +441,25 @@ export default function AdminCustomersPage() {
                 {built.byCity.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('customers.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[420px] text-left text-sm">
+                  <div className="-mx-4 overflow-x-auto px-4">
+                    <table className="w-full min-w-[480px] border-separate border-spacing-0 text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
-                          <th className="pb-2 font-medium">{t('common.city')}</th>
-                          <th className="pb-2 text-right font-medium">{t('customers.unique')}</th>
-                          <th className="pb-2 text-right font-medium">{t('customers.orders')}</th>
-                          <th className="pb-2 text-right font-medium">{t('customers.revenue')}</th>
+                          <th className="whitespace-nowrap px-3 py-2 font-medium">{t('common.city')}</th>
+                          <th className="whitespace-nowrap px-3 py-2 text-right font-medium">{t('customers.unique')}</th>
+                          <th className="whitespace-nowrap px-3 py-2 text-right font-medium">{t('customers.colOrders')}</th>
+                          <th className="whitespace-nowrap px-3 py-2 text-right font-medium">{t('customers.colRevenue')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {built.byCity.map((row) => (
                           <tr key={row.cityId}>
-                            <td className="py-2">{row.cityName}</td>
-                            <td className="py-2 text-right tabular-nums">{row.customers}</td>
-                            <td className="py-2 text-right tabular-nums">{row.periodOrders}</td>
-                            <td className="py-2 text-right tabular-nums">{formatMoney(row.periodRevenue)} ₸</td>
+                            <td className="px-3 py-2">{row.cityName}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{row.customers}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{row.periodOrders}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
+                              {formatMoney(row.periodRevenue)} ₸
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -471,32 +495,38 @@ export default function AdminCustomersPage() {
                 {tableRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('customers.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[720px] text-left text-sm">
+                  <div className="-mx-4 overflow-x-auto px-4">
+                    <table className="w-full min-w-[860px] border-separate border-spacing-0 text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
-                          <th className="pb-2 font-medium">{t('common.client')}</th>
-                          <th className="pb-2 font-medium">{t('customers.phone')}</th>
-                          <th className="pb-2 text-right font-medium">{t('customers.orders')}</th>
-                          <th className="pb-2 text-right font-medium">{t('customers.revenue')}</th>
-                          <th className="pb-2 font-medium">{t('customers.lastPurchase')}</th>
-                          <th className="pb-2 font-medium">{t('common.city')}</th>
-                          <th className="pb-2 font-medium" />
+                          <th className="min-w-[9rem] whitespace-nowrap px-3 py-2 font-medium">{t('common.client')}</th>
+                          <th className="min-w-[9.5rem] whitespace-nowrap px-3 py-2 font-medium">{t('customers.phone')}</th>
+                          <th className="w-24 whitespace-nowrap px-3 py-2 text-right font-medium">{t('customers.colOrders')}</th>
+                          <th className="w-32 whitespace-nowrap px-3 py-2 text-right font-medium">{t('customers.colRevenue')}</th>
+                          <th className="w-36 whitespace-nowrap px-3 py-2 font-medium">{t('customers.lastPurchase')}</th>
+                          <th className="min-w-[8rem] whitespace-nowrap px-3 py-2 font-medium">{t('common.city')}</th>
+                          <th className="w-28 whitespace-nowrap px-3 py-2 text-right font-medium" />
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody>
                         {tableRows.map((row) => (
-                          <tr key={row.phone}>
-                            <td className="py-2">{row.displayName}</td>
-                            <td className="py-2 tabular-nums">{row.phone}</td>
-                            <td className="py-2 text-right tabular-nums">{row.lifetimeRecognizedCount}</td>
-                            <td className="py-2 text-right tabular-nums">{formatMoney(row.periodRevenue)} ₸</td>
-                            <td className="py-2">{formatWhen(row.lastRecognizedAt)}</td>
-                            <td className="py-2">{row.cities.map((c) => c.name).join(', ') || '—'}</td>
-                            <td className="py-2 text-right">
+                          <tr key={row.phone} className="border-t border-slate-100">
+                            <td className="px-3 py-2.5 font-medium text-slate-900">{row.displayName}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-slate-600">{row.phone}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
+                              {row.lifetimeRecognizedCount}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
+                              {formatMoney(row.periodRevenue)} ₸
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">
+                              {formatInstantDmy(row.lastRecognizedAt)}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-600">{row.cities.map((c) => c.name).join(', ') || '—'}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-right">
                               <button
                                 type="button"
-                                className="text-blue-700"
+                                className="font-medium text-blue-700"
                                 onClick={() => setOpenPhone(row.phone)}
                               >
                                 {t('customers.history')}
@@ -511,84 +541,105 @@ export default function AdminCustomersPage() {
               </Section>
 
               {detail ? (
-                <Section title={`${t('customers.detail')}: ${detail.displayName}`}>
-                  <div className="space-y-3 text-sm">
-                    <p>
-                      {t('customers.phone')}: <span className="tabular-nums">{detail.phone}</span>
-                    </p>
-                    <p>
-                      {t('customers.names')}: {detail.names.join(', ') || '—'}
-                    </p>
-                    <p>
-                      {t('common.city')}: {detail.cities.map((c) => c.name).join(', ') || '—'}
-                    </p>
-                    <p>
-                      {t('customers.frequency')}:{' '}
-                      {detail.avgDaysBetweenPurchases == null
-                        ? '—'
-                        : `${detail.avgDaysBetweenPurchases.toFixed(1)} ${t('customers.days')}`}
-                    </p>
-                    <p>
-                      {t('customers.lastPurchase')}: {formatWhen(detail.lastRecognizedAt)} ·{' '}
-                      {t('customers.createdAt')}: {formatWhen(detail.lastCreatedAt)}
-                    </p>
-                    {detail.unpaidDebtAmount > 0 ? (
-                      <p>
-                        {t('customers.unpaidDebt')}: {formatMoney(detail.unpaidDebtAmount)} ₸
-                      </p>
-                    ) : null}
-                    <div>
-                      <p className="mb-1 font-medium">{t('customers.favorites')}</p>
-                      {detail.favoriteProducts.length === 0 ? (
-                        <p className="text-slate-500">{t('customers.empty')}</p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {detail.favoriteProducts.slice(0, 8).map((p) => (
-                            <li key={p.key} className="flex justify-between gap-3">
-                              <span>{p.name}</span>
-                              <span className="tabular-nums">
-                                {p.qty} · {formatMoney(p.revenue)} ₸
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                <div className="fixed inset-0 z-50 flex items-end justify-center md:items-stretch md:justify-end">
+                  <button
+                    type="button"
+                    className="absolute inset-0 bg-slate-900/40"
+                    aria-label={t('customers.closeHistory')}
+                    onClick={() => setOpenPhone(null)}
+                  />
+                  <aside
+                    role="dialog"
+                    aria-modal="true"
+                    className="relative z-10 flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl md:h-full md:max-h-none md:rounded-none md:rounded-l-2xl"
+                  >
+                    <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                      <div className="min-w-0">
+                        <h2 className="truncate text-base font-semibold text-slate-900">
+                          {t('customers.detail')}: {detail.displayName}
+                        </h2>
+                        <p className="mt-0.5 tabular-nums text-sm text-slate-500">{detail.phone}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg px-2 py-1 text-sm text-slate-600"
+                        onClick={() => setOpenPhone(null)}
+                      >
+                        {t('common.close')}
+                      </button>
                     </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[640px] text-left text-sm">
-                        <thead className="text-xs text-slate-500">
-                          <tr>
-                            <th className="pb-2 font-medium">{t('customers.createdAt')}</th>
-                            <th className="pb-2 font-medium">{t('customers.recognizedAt')}</th>
-                            <th className="pb-2 font-medium">{t('common.city')}</th>
-                            <th className="pb-2 font-medium">{t('common.payment')}</th>
-                            <th className="pb-2 text-right font-medium">{t('common.amount')}</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {detail.history.map((row) => (
-                            <tr key={row.id}>
-                              <td className="py-2">{formatWhen(row.createdAt)}</td>
-                              <td className="py-2">{formatWhen(row.recognizedAt)}</td>
-                              <td className="py-2">{row.cityName}</td>
-                              <td className="py-2">
-                                {row.isCanceled
-                                  ? t('common.canceled')
-                                  : row.unpaidDebt
-                                    ? t('customers.unpaidDebt')
-                                    : row.paymentType || '—'}
-                              </td>
-                              <td className="py-2 text-right tabular-nums">{formatMoney(row.totalSum)} ₸</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 text-sm">
+                      <div className="space-y-3">
+                        <p>
+                          {t('customers.names')}: {detail.names.join(', ') || '—'}
+                        </p>
+                        <p>
+                          {t('common.city')}: {detail.cities.map((c) => c.name).join(', ') || '—'}
+                        </p>
+                        <p>
+                          {t('customers.frequency')}:{' '}
+                          {detail.avgDaysBetweenPurchases == null
+                            ? '—'
+                            : `${detail.avgDaysBetweenPurchases.toFixed(1)} ${t('customers.days')}`}
+                        </p>
+                        <p>
+                          {t('customers.lastPurchase')}: {formatInstantDmy(detail.lastRecognizedAt)}
+                        </p>
+                        <p>
+                          {t('customers.createdAt')}: {formatInstantDmy(detail.lastCreatedAt)}
+                        </p>
+                        {detail.unpaidDebtAmount > 0 ? (
+                          <p>
+                            {t('customers.unpaidDebt')}: {formatMoney(detail.unpaidDebtAmount)} ₸
+                          </p>
+                        ) : null}
+                        <div>
+                          <p className="mb-1 font-medium">{t('customers.favorites')}</p>
+                          {detail.favoriteProducts.length === 0 ? (
+                            <p className="text-slate-500">{t('customers.empty')}</p>
+                          ) : (
+                            <ul className="space-y-1">
+                              {detail.favoriteProducts.slice(0, 8).map((p) => (
+                                <li key={p.key} className="flex justify-between gap-3">
+                                  <span>{p.name}</span>
+                                  <span className="whitespace-nowrap tabular-nums">
+                                    {p.qty} · {formatMoney(p.revenue)} ₸
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        <div className="-mx-4 overflow-x-auto px-4">
+                          <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+                            <thead className="text-xs text-slate-500">
+                              <tr>
+                                <th className="whitespace-nowrap px-3 py-2 font-medium">{t('customers.createdAt')}</th>
+                                <th className="whitespace-nowrap px-3 py-2 font-medium">{t('customers.recognizedAt')}</th>
+                                <th className="whitespace-nowrap px-3 py-2 font-medium">{t('common.city')}</th>
+                                <th className="whitespace-nowrap px-3 py-2 font-medium">{t('common.payment')}</th>
+                                <th className="whitespace-nowrap px-3 py-2 text-right font-medium">{t('common.amount')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {detail.history.map((row) => (
+                                <tr key={row.id} className="border-t border-slate-100">
+                                  <td className="whitespace-nowrap px-3 py-2">{formatInstantDmy(row.createdAt)}</td>
+                                  <td className="whitespace-nowrap px-3 py-2">{formatInstantDmy(row.recognizedAt)}</td>
+                                  <td className="px-3 py-2">{row.cityName}</td>
+                                  <td className="whitespace-nowrap px-3 py-2">{paymentCopy(row, t)}</td>
+                                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
+                                    {formatMoney(row.totalSum)} ₸
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </div>
-                    <button type="button" className="text-slate-600" onClick={() => setOpenPhone(null)}>
-                      {t('common.close')}
-                    </button>
-                  </div>
-                </Section>
+                  </aside>
+                </div>
               ) : null}
             </div>
           ) : null}

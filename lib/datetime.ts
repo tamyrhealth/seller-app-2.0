@@ -41,6 +41,21 @@ export function ymdInTz(date: Date, tz: string = DEFAULT_TZ): string {
   return date.toLocaleDateString('en-CA', { timeZone: tz });
 }
 
+/** YYYY-MM-DD → DD.MM.YYYY */
+export function formatYmdDmy(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return ymd;
+  return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+/** Instant → DD.MM.YYYY в TZ (по умолчанию Asia/Almaty). */
+export function formatInstantDmy(iso: string | null | undefined, tz: string = DEFAULT_TZ): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return formatYmdDmy(ymdInTz(d, tz));
+}
+
 /** Сдвиг календарного дня YYYY-MM-DD в TZ (Казахстан UTC+5 без DST). */
 export function addDaysYmd(dateStr: string, days: number, tz: string = DEFAULT_TZ): string {
   const noon = new Date(`${dateStr}T12:00:00+05:00`);

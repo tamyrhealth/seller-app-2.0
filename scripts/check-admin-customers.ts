@@ -15,6 +15,7 @@ import {
   yearRangeYmd,
 } from '../lib/adminCustomersView';
 import { CUSTOMER_ORDER_SELECT } from '../lib/adminCustomers';
+import { formatInstantDmy, formatYmdDmy } from '../lib/datetime';
 
 function fail(msg: string): never {
   console.error('FAIL', msg);
@@ -352,6 +353,13 @@ if (!page.includes('[refreshKey]')) fail('orders load must not depend on period 
 if (page.includes('console.log')) fail('page must not log');
 if (page.includes('/api/')) fail('no public customer API');
 if (!page.includes('customers.truncated') || !page.includes('customers.identifiedShare')) fail('coverage copy');
+if (!page.includes('formatInstantDmy') || !page.includes('whitespace-nowrap')) fail('readable table dates/amounts');
+if (!page.includes('role="dialog"') || !page.includes('max-h-[92dvh]')) fail('history must open in a viewport dialog');
+if (!page.includes('paymentCopy') || !page.includes("t('common.cash')")) fail('localized payment labels');
+if (!page.includes('paymentCopy(row, t)')) fail('history uses localized payment labels');
+if (formatYmdDmy('2026-11-08') !== '08.11.2026') fail('DD.MM.YYYY');
+if (formatInstantDmy('2026-11-07T21:00:00.000Z') !== '08.11.2026') fail('Almaty calendar date');
+if (!i18n.includes("'common.debt': 'Долг'") || !i18n.includes("'common.debt': 'Қарыз'")) fail('debt i18n');
 if (!page.includes("role=\"admin\"")) fail('role admin');
 if (!nav.includes('href="/admin/customers"')) fail('nav customers');
 if (managerNav.includes('/admin/customers')) fail('manager must not see customers');
