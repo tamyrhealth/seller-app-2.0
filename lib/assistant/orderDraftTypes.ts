@@ -29,6 +29,7 @@ export type DraftResolved = {
   city_candidates?: string[];
   payment_type: PaymentType | null;
   payment_raw: string;
+  paid_status?: 'paid' | 'unpaid' | 'debt' | null;
   is_debt: boolean;
   is_preorder: boolean;
   pickup_date: string | null;
@@ -61,6 +62,7 @@ export type DraftPreview = {
   total_sum: number;
   total_ready: boolean;
   payment_label: string;
+  paid_status?: 'paid' | 'unpaid' | 'debt' | null;
   is_debt: boolean;
   is_preorder: boolean;
   invoice_date: string | null;
@@ -68,6 +70,14 @@ export type DraftPreview = {
   pickup_date: string | null;
   customer_name?: string | null;
   customer_phone?: string | null;
+};
+
+export type ResolveResult = {
+  resolved: DraftResolved;
+  preview: DraftPreview;
+  errors: DraftIssue[];
+  warnings: DraftIssue[];
+  can_confirm: boolean;
 };
 
 export type AssistantDraftRow = {

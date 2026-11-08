@@ -1,4 +1,5 @@
-import type { ResolveResult } from '@/lib/assistant/resolveOrder';
+import { draftChoiceHints } from '@/lib/assistant/invoiceResolve';
+import type { ResolveResult } from '@/lib/assistant/orderDraftTypes';
 
 export function remarksPhrase(n: number): string {
   const n10 = n % 10;
@@ -14,5 +15,7 @@ export function buildDraftChatMessage(result: ResolveResult): string {
   if (n === 0) {
     return 'Накладная распознана. Проверьте карточку заказа.';
   }
-  return `Накладная распознана. Найдены ${remarksPhrase(n)}. Исправьте их в карточке заказа.`;
+  const hints = draftChoiceHints(result.errors);
+  const extra = hints.length ? ` ${hints.join('. ')}.` : '';
+  return `Накладная распознана. Найдены ${remarksPhrase(n)}. Исправьте их в карточке заказа.${extra}`;
 }

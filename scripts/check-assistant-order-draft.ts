@@ -117,7 +117,8 @@ if (!routeUpdate.includes('чужой черновик')) fail('update owner gua
 if (!routeUpdate.includes('draft_not_editable')) fail('update locked-status guard');
 if (!routeCatalog.includes("eq('role', 'seller')")) fail('catalog sellers only');
 if (!resolve.includes('export async function applyDraftEdit')) fail('applyDraftEdit');
-if (!resolve.includes('total_ready')) fail('preview total_ready');
+const invoiceResolve = read('lib/assistant/invoiceResolve.ts');
+if (!invoiceResolve.includes('total_ready') && !resolve.includes('total_ready')) fail('preview total_ready');
 if (!resolve.includes('price_retail')) fail('live retail prices');
 
 if (!/^BEGIN;/m.test(updateSql) || !/^COMMIT;/m.test(updateSql)) fail('5.2.2b migration must be transactional');
@@ -144,6 +145,7 @@ if (!ui.includes("first !== 'pending'")) fail('UI must retry pending confirm onc
 if (ui.includes("role: 'assistant'")) fail('UI must not insert assistant messages');
 if (!card.includes('Подтвердить заказ')) fail('confirm button');
 if (!card.includes('Исправить')) fail('fix button');
+if (!card.includes('Закрыть без сохранения')) fail('discard edits without DB write');
 if (!card.includes('Отмена')) fail('cancel button');
 if (!card.includes('Сохранить изменения')) fail('save edits button');
 if (!card.includes('Цена не определена')) fail('undefined price label');

@@ -15,6 +15,7 @@ import {
   type SimilarOrderMatch,
 } from '@/lib/similarOrders';
 import { useAuth } from '@/lib/auth';
+import { draftChoiceHints } from '@/lib/assistant/invoiceResolve';
 
 function money(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -124,9 +125,10 @@ export default function AssistantOrderDraftCard({
   const locked = done || pending || draft.status === 'cancelled';
   const ready = totalReady(draft);
 
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(() => !readOnly && draft.status === 'blocked' && !draft.can_confirm);
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [autoOpened, setAutoOpened] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [sellerId, setSellerId] = useState(draft.resolved?.seller_id || '');
   const [cityId, setCityId] = useState(draft.resolved?.city_id || '');
@@ -165,10 +167,62 @@ export default function AssistantOrderDraftCard({
       })),
   });
 
+  const choiceHints = draftChoiceHints(draft.errors || []);
+  const needsPaymentPick =
+    (draft.errors || []).some((e) =>
+      ['payment_unspecified', 'payment_missing', 'payment_ambiguous'].includes(e.code)
+    ) && !isDebt;
+
   useEffect(() => {
     setSimilarWarning([]);
     setSimilarAck(null);
   }, [draftComposition]);
+
+  useEffect(() => {
+    if (readOnly || locked || draft.can_confirm || draft.status === 'cancelled') return;
+    if (autoOpened) return;
+    setAutoOpened(true);
+    void openEdit();
+    // openEdit is stable enough per draft id
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.id]);
+
+  useEffect(() => {
+    if (readOnly || locked || !draft.can_confirm) return;
+    const seller = draft.resolved?.seller_id || '';
+    const city = draft.resolved?.city_id || '';
+    const items = (draft.resolved?.items || [])
+      .filter((item) => item.product_id && Number(item.qty) > 0)
+      .map((item) => ({
+        product_id: String(item.product_id),
+        qty: Number(item.qty),
+        is_gift: item.is_gift === true,
+      }));
+    if (!seller || !city || items.length === 0) return;
+    let cancelled = false;
+    void lookupSimilarOrders(supabase, {
+      sellerId: seller,
+      cityId: city,
+      items,
+      customerPhone: draft.customer_phone || null,
+      excludeIdempotencyKey: draft.idempotency_key || null,
+    }).then((similar) => {
+      if (cancelled || !similar.ok) return;
+      if (similar.result.matches.length > 0) setSimilarWarning(similar.result.matches);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    draft.can_confirm,
+    draft.customer_phone,
+    draft.idempotency_key,
+    draft.resolved?.city_id,
+    draft.resolved?.items,
+    draft.resolved?.seller_id,
+    locked,
+    readOnly,
+  ]);
 
   async function requestConfirm(ackOverride?: SimilarAck | null) {
     const seller = draft.resolved?.seller_id || '';
@@ -245,7 +299,10 @@ export default function AssistantOrderDraftCard({
     return next;
   }
 
-  async function persistItems(nextLines: EditLine[]) {
+  async function persistItems(
+    nextLines: EditLine[],
+    overrides?: { payment_type?: PaymentType | ''; is_debt?: boolean }
+  ) {
     const access = await token();
     if (!access) {
       setLocalError('Сессия истекла. Войдите снова.');
@@ -263,15 +320,17 @@ export default function AssistantOrderDraftCard({
       is_gift: line.is_gift,
       raw_name: line.raw_name,
     }));
+    const debt = overrides?.is_debt ?? isDebt;
+    const pay = overrides?.payment_type !== undefined ? overrides.payment_type : paymentType;
     const body: SaveBody = {
       seller_id: seller,
       city_id: city,
-      payment_type: isDebt ? 'debt' : paymentType || draft.resolved?.payment_type || null,
-      is_debt: isDebt,
-      is_preorder: isPreorder && !isDebt,
+      payment_type: debt ? 'debt' : pay || draft.resolved?.payment_type || null,
+      is_debt: debt,
+      is_preorder: isPreorder && !debt,
       invoice_date: invoiceDate || draft.resolved?.invoice_date || null,
       invoice_time: invoiceTime || draft.resolved?.invoice_time || null,
-      pickup_date: isPreorder ? pickupDate || draft.resolved?.pickup_date || null : null,
+      pickup_date: isPreorder && !debt ? pickupDate || draft.resolved?.pickup_date || null : null,
       items,
     };
     const res = await fetch('/api/assistant/orders/update', {
@@ -375,6 +434,50 @@ export default function AssistantOrderDraftCard({
     }
   }
 
+  function closeEditWithoutSave() {
+    if (saving) return;
+    setSellerId(draft.resolved?.seller_id || '');
+    setCityId(draft.resolved?.city_id || '');
+    setPaymentType(draft.resolved?.is_debt ? 'debt' : draft.resolved?.payment_type || '');
+    setIsDebt(draft.resolved?.is_debt === true || preview.is_debt === true);
+    setIsPreorder(draft.resolved?.is_preorder === true || preview.is_preorder === true);
+    setInvoiceDate(draft.resolved?.invoice_date || preview.invoice_date || '');
+    setInvoiceTime(draft.resolved?.invoice_time || preview.invoice_time || '');
+    setPickupDate(draft.resolved?.pickup_date || preview.pickup_date || '');
+    setLines(seedLines(draft));
+    setLocalError('');
+    setEditing(false);
+  }
+
+  async function quickSetPayment(next: PaymentType) {
+    if (readOnly || busy || locked || saving) return;
+    setIsDebt(false);
+    setPaymentType(next);
+    const seller = sellerId || draft.resolved?.seller_id || '';
+    const city = cityId || draft.resolved?.city_id || '';
+    if (!seller || !city) {
+      setLocalError('Сначала выберите продавца, затем Kaspi или наличные.');
+      if (!editing) void openEdit();
+      return;
+    }
+    setSaving(true);
+    setLocalError('');
+    try {
+      const access = await token();
+      if (!access) {
+        setLocalError('Сессия истекла. Войдите снова.');
+        return;
+      }
+      if (!catalog) await loadCatalog(access);
+      const ok = await persistItems(seedLines(draft), { payment_type: next, is_debt: false });
+      if (ok) setEditing(false);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Сеть недоступна.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function requestCancel() {
     if (readOnly || busy || locked) return;
     const ok = window.confirm('Отменить этот черновик? Заказ создан не будет. Это нельзя отменить.');
@@ -390,6 +493,36 @@ export default function AssistantOrderDraftCard({
       {pending ? <p className="mt-1 text-sm text-amber-800">Заказ обрабатывается, статус ещё не подтверждён.</p> : null}
       {draft.status === 'cancelled' ? <p className="mt-1 text-sm text-gray-600">Черновик отменён.</p> : null}
       {localError ? <p className="mt-1 text-sm text-red-700">{localError}</p> : null}
+      {choiceHints.length > 0 && !done && draft.status !== 'cancelled' ? (
+        <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-950">
+          <p className="font-medium">Чтобы подтвердить заказ, выберите:</p>
+          <ul className="mt-1 list-disc pl-4">
+            {choiceHints.map((hint) => (
+              <li key={hint}>{hint}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {needsPaymentPick && !readOnly && !locked ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy || saving}
+            onClick={() => void quickSetPayment('kaspi')}
+            className="px-3 py-2 rounded-lg bg-red-600 text-white disabled:opacity-50"
+          >
+            Kaspi
+          </button>
+          <button
+            type="button"
+            disabled={busy || saving}
+            onClick={() => void quickSetPayment('cash')}
+            className="px-3 py-2 rounded-lg bg-gray-800 text-white disabled:opacity-50"
+          >
+            Наличные
+          </button>
+        </div>
+      ) : null}
 
       {editing && catalog ? (
         <div className="mt-2 space-y-2">
@@ -667,14 +800,24 @@ export default function AssistantOrderDraftCard({
             Подтвердить заказ
           </button>
           {editing ? (
-            <button
-              type="button"
-              disabled={busy || saving}
-              onClick={() => void saveChanges()}
-              className="px-3 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
-            >
-              Сохранить изменения
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={busy || saving}
+                onClick={() => void saveChanges()}
+                className="px-3 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
+              >
+                Сохранить изменения
+              </button>
+              <button
+                type="button"
+                disabled={busy || saving}
+                onClick={closeEditWithoutSave}
+                className="px-3 py-2 rounded-lg bg-white border border-gray-300 text-gray-900 disabled:opacity-50"
+              >
+                Закрыть без сохранения
+              </button>
+            </>
           ) : (
             <button
               type="button"

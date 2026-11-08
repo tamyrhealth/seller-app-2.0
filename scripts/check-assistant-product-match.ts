@@ -37,6 +37,8 @@ function one(query: string, name: string) {
 }
 
 one('порошок', 'ПОРОШОК ОРГ 250г');
+one('порошка', 'ПОРОШОК ОРГ 250г');
+one('чая', 'ШАЙ ОРГ 500г');
 one('порошок орг', 'ПОРОШОК ОРГ 250г');
 one('poroshok', 'ПОРОШОК ОРГ 250г');
 one('шикі порошок', 'ШИКІ ПОРОШОК ОРГ 250г');
@@ -122,8 +124,12 @@ if (!card.includes('Исправить')) fail('edit kept');
 if (card.includes("from('products').delete")) fail('card must not delete products');
 if (!catalogRoute.includes('price_retail')) fail('catalog must expose live prices');
 if (!catalogRoute.includes("eq('is_active', true)")) fail('catalog active only');
-if (!resolve.includes('resolveProductQuery')) fail('server resolve uses matcher');
-if (!resolve.includes('resolveSellerAndCity')) fail('seller/city matcher');
+const invoiceResolve = read('lib/assistant/invoiceResolve.ts');
+const invoiceSeller = read('lib/assistant/invoiceSeller.ts');
+if (!resolve.includes('resolveProductQuery') && !invoiceResolve.includes('resolveProductQuery')) {
+  fail('server resolve uses matcher');
+}
+if (!invoiceSeller.includes('resolveSellerAndCity')) fail('seller/city matcher');
 if (!resolve.includes("eq('is_active', true)")) fail('resolve active catalog');
 if (!resolve.includes('applyDraftEdit')) fail('edit/re-save kept');
 if (!update.includes('applyDraftEdit')) fail('re-save goes through applyDraftEdit');

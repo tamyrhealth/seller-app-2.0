@@ -151,8 +151,10 @@ if (/customer_phone/.test(parse) && parse.includes("customer_phone: {")) fail('A
 const card = read('components/AssistantOrderDraftCard.tsx');
 if (!card.includes('preview.customer_name') && !card.includes('Клиент')) fail('card must show customer');
 const resolve = read('lib/assistant/resolveOrder.ts');
-if (!resolve.includes('extractInvoiceCustomer')) fail('resolve must use deterministic customer extract');
-if (!resolve.includes('payment_ambiguous')) fail('ambiguous payment must block guess');
+const invoiceResolve = read('lib/assistant/invoiceResolve.ts');
+if (!invoiceResolve.includes('extractInvoiceCustomer')) fail('resolve must use deterministic customer extract');
+if (!invoiceResolve.includes('payment_ambiguous')) fail('ambiguous payment must block guess');
+if (!resolve.includes('resolveInvoiceFromCatalogs')) fail('invoice path still goes through server resolve');
 const tools = read('lib/assistant/tools.ts');
 if (/customer_phone|debt_customer_phone/.test(tools)) fail('tools must not expose phones');
 

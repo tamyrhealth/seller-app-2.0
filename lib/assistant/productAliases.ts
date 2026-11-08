@@ -1,4 +1,5 @@
 import { compactKey, levenshtein, nameKey, nameTokens, normalizeName, tokenClose } from '@/lib/assistant/nameFold';
+import { foldTransferProductQuery } from '@/lib/assistant/transferProductFold';
 
 export { normalizeName, nameKey };
 
@@ -203,15 +204,16 @@ function uniqueOrAmbiguous(ranked: { product: CatalogProduct; score: number }[])
 }
 
 export function resolveProductQuery(query: string, catalog: CatalogProduct[]): ProductMatchResult {
+  const folded = foldTransferProductQuery(query);
   const active = activeCatalog(catalog);
-  const q = nameKey(query);
+  const q = nameKey(folded);
   if (!q) return { chosen: null, candidates: [], reason: 'none' };
 
   const exact = active.filter((p) => nameKey(p.name) === q);
   if (exact.length === 1) return { chosen: exact[0], candidates: exact, reason: 'exact' };
   if (exact.length > 1) return { chosen: null, candidates: exact.slice(0, 5), reason: 'ambiguous' };
 
-  const rule = findAliasRule(query);
+  const rule = findAliasRule(folded) || findAliasRule(query);
   if (rule) {
     const hits = pickByTarget(active, rule.target);
     if (hits.length === 1) return { chosen: hits[0], candidates: hits, reason: 'alias' };
@@ -223,7 +225,7 @@ export function resolveProductQuery(query: string, catalog: CatalogProduct[]): P
   }
 
   const ranked = active
-    .map((product) => ({ product, score: similarScore(query, product) }))
+    .map((product) => ({ product, score: Math.max(similarScore(folded, product), similarScore(query, product)) }))
     .filter((x) => x.score >= 40)
     .sort((a, b) => b.score - a.score);
   return uniqueOrAmbiguous(ranked);

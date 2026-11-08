@@ -9,10 +9,16 @@ const PAYMENT_LABELS: Record<PaymentType, string> = {
   debt: 'Долг',
 };
 
-export function paymentLabel(type: PaymentType | null, isDebt: boolean): string {
+export function paymentLabel(
+  type: PaymentType | null,
+  isDebt: boolean,
+  paidStatus?: PaidStatus
+): string {
   if (isDebt) return PAYMENT_LABELS.debt;
-  if (!type) return 'Не указан';
-  return PAYMENT_LABELS[type];
+  if (type) return PAYMENT_LABELS[type];
+  if (paidStatus === 'paid') return 'Оплачено — выберите Kaspi или наличные';
+  if (paidStatus === 'unpaid') return 'Не оплачено — выберите способ';
+  return 'Не указан';
 }
 
 function escapeRe(value: string) {
@@ -39,19 +45,37 @@ function isWarehouseTransferTalk(raw: string): boolean {
   );
 }
 
+export type PaidStatus = 'paid' | 'unpaid' | 'debt' | null;
+
 export function detectPayment(text: string): {
   payment_type: PaymentType | null;
   is_debt: boolean;
   is_preorder: boolean;
   paid_unspecified: boolean;
+  paid_status: PaidStatus;
   ambiguous: boolean;
 } {
   const raw = String(text || '');
   const is_debt = /(в\s*долг|долг|қарыз|карыз|\bdebt\b)/i.test(raw);
   const is_preorder = /(предзаказ|алдын\s*ала|preorder)/i.test(raw);
-  const paid_unspecified = /(төленген|толенген|оплачен|оплачено|\bpaid\b)/i.test(raw);
+  const is_unpaid = hasAny(raw, [
+    'не оплачено',
+    'не оплачен',
+    'неоплачено',
+    'неоплачен',
+    'төленбеген',
+    'толенбеген',
+    'төленбеді',
+    'unpaid',
+  ]);
+  const paidWord =
+    !is_unpaid &&
+    (hasAny(raw, ['төленген', 'толенген', 'оплачено', 'оплачена', 'оплачен', 'paid']) ||
+      hasPhrase(raw, 'paid'));
+  const paid_unspecified = paidWord && !is_debt;
+  const paid_status: PaidStatus = is_debt ? 'debt' : is_unpaid ? 'unpaid' : paidWord ? 'paid' : null;
   if (is_debt) {
-    return { payment_type: 'debt', is_debt, is_preorder, paid_unspecified, ambiguous: false };
+    return { payment_type: 'debt', is_debt, is_preorder, paid_unspecified: false, paid_status, ambiguous: false };
   }
 
   const found = new Set<Exclude<PaymentType, 'debt'>>();
@@ -74,13 +98,14 @@ export function detectPayment(text: string): {
 
   const methods = [...found];
   if (methods.length > 1) {
-    return { payment_type: null, is_debt, is_preorder, paid_unspecified, ambiguous: true };
+    return { payment_type: null, is_debt, is_preorder, paid_unspecified, paid_status, ambiguous: true };
   }
   return {
     payment_type: methods[0] || null,
     is_debt,
     is_preorder,
-    paid_unspecified,
+    paid_unspecified: paid_unspecified && methods.length === 0,
+    paid_status,
     ambiguous: false,
   };
 }
