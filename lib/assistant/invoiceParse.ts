@@ -13,6 +13,7 @@ export type ParsedInvoice = {
   intent: 'create_order' | 'question';
   seller_name: string;
   city_name: string;
+  customer_name: string;
   payment_raw: string;
   is_debt: boolean;
   is_preorder: boolean;
@@ -29,6 +30,7 @@ const SCHEMA = {
     intent: { type: 'string', enum: ['create_order', 'question'] },
     seller_name: { type: 'string' },
     city_name: { type: 'string' },
+    customer_name: { type: 'string' },
     payment_raw: { type: 'string' },
     is_debt: { type: 'boolean' },
     is_preorder: { type: 'boolean' },
@@ -53,6 +55,7 @@ const SCHEMA = {
     'intent',
     'seller_name',
     'city_name',
+    'customer_name',
     'payment_raw',
     'is_debt',
     'is_preorder',
@@ -67,7 +70,10 @@ const INSTRUCTIONS = `Ты извлекаешь поля накладной дл
 
 Язык текста: русский и/или казахский, поля в произвольном порядке.
 Верни JSON по схеме.
-Пустые неизвестные строки оставляй пустыми. Не выдумывай продавца, город, товары, количества, оплату, долг, предзаказ и подарки.
+Пустые неизвестные строки оставляй пустыми. Не выдумывай продавца, покупателя, город, товары, количества, оплату, долг, предзаказ и подарки.
+seller_name — продавец. Часто первая строка.
+customer_name — покупатель, не продавец. Если в строке имя и скрытый телефон ([скрыто]) — это покупатель. Не копируй продавца в customer_name.
+payment_raw — как написано: наличка/нал/наличные, перевод, kaspi/каспи, kaspi qr, kaspi pay, карта.
 intent=create_order только если текст похож на накладную или явную просьбу оформить заказ по перечисленным товарам.
 intent=question — обычный вопрос об остатках или заказах.
 qty — число. is_gift=true только если явно подарок/сыйлық.
@@ -107,6 +113,7 @@ export async function parseInvoiceStructured(userText: string, timeoutMs: number
   }
   parsed.seller_name = String(parsed.seller_name || '').trim();
   parsed.city_name = String(parsed.city_name || '').trim();
+  parsed.customer_name = String(parsed.customer_name || '').trim();
   parsed.payment_raw = String(parsed.payment_raw || '').trim();
   parsed.pickup_date = String(parsed.pickup_date || '').trim();
   parsed.pickup_time = String(parsed.pickup_time || '').trim();

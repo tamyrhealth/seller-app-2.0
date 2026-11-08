@@ -70,7 +70,7 @@ export async function POST(req: Request) {
 
   const { data: draft, error: draftErr } = await userDb
     .from('assistant_order_drafts')
-    .select('id, owner_id, status, customer_phone')
+    .select('id, owner_id, status, customer_phone, resolved')
     .eq('id', draftId)
     .maybeSingle();
   if (draftErr) {
@@ -87,6 +87,10 @@ export async function POST(req: Request) {
 
   let result;
   try {
+    const prevResolved =
+      draft.resolved && typeof draft.resolved === 'object' && !Array.isArray(draft.resolved)
+        ? (draft.resolved as { customer_name?: string | null; customer_phone?: string | null })
+        : {};
     result = await applyDraftEdit(
       userDb,
       {
@@ -99,6 +103,11 @@ export async function POST(req: Request) {
         invoice_time: typeof body.invoice_time === 'string' ? body.invoice_time : null,
         pickup_date: typeof body.pickup_date === 'string' ? body.pickup_date : null,
         items: mapped,
+        customer_name: prevResolved.customer_name || null,
+        customer_phone:
+          (typeof draft.customer_phone === 'string' && draft.customer_phone) ||
+          prevResolved.customer_phone ||
+          null,
       },
       typeof draft.customer_phone === 'string' ? draft.customer_phone : null
     );

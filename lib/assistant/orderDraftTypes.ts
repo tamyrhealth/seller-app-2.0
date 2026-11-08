@@ -35,6 +35,8 @@ export type DraftResolved = {
   invoice_date: string | null;
   invoice_time: string | null;
   comment: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
   debt_customer_name: string | null;
   debt_due_at: string | null;
   debt_note: string | null;
@@ -64,6 +66,8 @@ export type DraftPreview = {
   invoice_date: string | null;
   invoice_time: string | null;
   pickup_date: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
 };
 
 export type AssistantDraftRow = {

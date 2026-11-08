@@ -1,4 +1,5 @@
 import type { PaymentType } from '@/lib/types';
+import { extractPhonesCanon } from '@/lib/assistant/customerExtract';
 
 const PAYMENT_LABELS: Record<PaymentType, string> = {
   cash: 'Наличные',
@@ -14,23 +15,74 @@ export function paymentLabel(type: PaymentType | null, isDebt: boolean): string 
   return PAYMENT_LABELS[type];
 }
 
+function escapeRe(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasPhrase(raw: string, phrase: string): boolean {
+  const n = phrase.toLowerCase();
+  const text = ` ${raw.toLowerCase().replace(/ё/g, 'е')} `;
+  if (n.includes(' ') || n.includes('-')) {
+    return text.replace(/-/g, ' ').includes(` ${n.replace(/-/g, ' ')} `) || text.includes(n);
+  }
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(n)}([^\\p{L}\\p{N}]|$)`, 'iu');
+  return re.test(raw);
+}
+
+function hasAny(raw: string, phrases: string[]): boolean {
+  return phrases.some((p) => hasPhrase(raw, p));
+}
+
+function isWarehouseTransferTalk(raw: string): boolean {
+  return /(перевод\s+(товар|на\s+склад|со\s+склад|склад)|товар\S*\s+.*перевод|между\s+склад|перемещен|перемещение|перевод\s+склад)/i.test(
+    raw
+  );
+}
+
 export function detectPayment(text: string): {
   payment_type: PaymentType | null;
   is_debt: boolean;
   is_preorder: boolean;
   paid_unspecified: boolean;
+  ambiguous: boolean;
 } {
-  const raw = text.toLowerCase();
+  const raw = String(text || '');
   const is_debt = /(в\s*долг|долг|қарыз|карыз|\bdebt\b)/i.test(raw);
   const is_preorder = /(предзаказ|алдын\s*ала|preorder)/i.test(raw);
   const paid_unspecified = /(төленген|толенген|оплачен|оплачено|\bpaid\b)/i.test(raw);
-  let payment_type: PaymentType | null = null;
-  if (is_debt) payment_type = 'debt';
-  else if (/(kaspi|каспи)/i.test(raw)) payment_type = 'kaspi';
-  else if (/(карт|card)/i.test(raw)) payment_type = 'card';
-  else if (/(перевод|аударым|transfer)/i.test(raw)) payment_type = 'transfer';
-  else if (/(наличн|касса|қолма|колма|cash|ақша)/i.test(raw)) payment_type = 'cash';
-  return { payment_type, is_debt, is_preorder, paid_unspecified };
+  if (is_debt) {
+    return { payment_type: 'debt', is_debt, is_preorder, paid_unspecified, ambiguous: false };
+  }
+
+  const found = new Set<Exclude<PaymentType, 'debt'>>();
+  const kaspiQr = hasAny(raw, ['kaspi qr', 'каспи qr', 'каспи куар', 'kaspiqr', 'каспиqr']);
+  const kaspiPay = hasAny(raw, ['kaspi pay', 'kaspi пэй', 'kaspi пей', 'каспи pay', 'каспи пэй', 'каспи пей']);
+  const kaspiWord = hasAny(raw, ['kaspi', 'каспи', 'каспий']);
+  const qrAlone = hasPhrase(raw, 'qr') || hasPhrase(raw, 'куар');
+  if (kaspiQr || kaspiPay || kaspiWord || qrAlone) found.add('kaspi');
+
+  if (hasAny(raw, ['нал', 'налом', 'наличка', 'наличку', 'наличные', 'наличными', 'наличкой', 'наличн', 'қолма-қол', 'қолма қол', 'колма-кол', 'колма кол', 'cash'])) {
+    found.add('cash');
+  }
+
+  if (hasAny(raw, ['карта', 'картой', 'карточку', 'карточка', 'карточки', 'банк картасы', 'card'])) {
+    found.add('card');
+  }
+
+  const transferWord = hasAny(raw, ['перевод', 'переводом', 'перевёл', 'перевел', 'аударым', 'аударды', 'transfer']);
+  if (transferWord && !isWarehouseTransferTalk(raw)) found.add('transfer');
+
+  const methods = [...found];
+  if (methods.length > 1) {
+    return { payment_type: null, is_debt, is_preorder, paid_unspecified, ambiguous: true };
+  }
+  return {
+    payment_type: methods[0] || null,
+    is_debt,
+    is_preorder,
+    paid_unspecified,
+    ambiguous: false,
+  };
 }
 
 export function parseLooseDate(raw: string): string | null {
@@ -68,15 +120,5 @@ export function looksLikeInvoice(text: string): boolean {
 }
 
 export function extractPhones(text: string): string[] {
-  const matches = text.match(/(?:\+?\d[\d\s().-]{7,}\d)/g) || [];
-  const out: string[] = [];
-  for (const raw of matches) {
-    const digits = raw.replace(/\D/g, '');
-    if (digits.length < 10) continue;
-    let n = digits;
-    if (n.length === 11 && n.startsWith('8')) n = `7${n.slice(1)}`;
-    if (n.length === 10 && n.startsWith('7')) n = `7${n}`;
-    out.push(n);
-  }
-  return [...new Set(out)];
+  return extractPhonesCanon(text);
 }

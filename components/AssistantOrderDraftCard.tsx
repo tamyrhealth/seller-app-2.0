@@ -546,6 +546,14 @@ export default function AssistantOrderDraftCard({
               <dd className="font-medium">{preview.city_name || '—'}</dd>
             </div>
             <div>
+              <dt className="text-gray-500">Клиент</dt>
+              <dd className="font-medium">
+                {[preview.customer_name || draft.resolved?.customer_name, preview.customer_phone || draft.customer_phone || draft.resolved?.customer_phone]
+                  .filter(Boolean)
+                  .join(' · ') || '—'}
+              </dd>
+            </div>
+            <div>
               <dt className="text-gray-500">Оплата</dt>
               <dd className="font-medium">{preview.payment_label || '—'}</dd>
             </div>

@@ -9,6 +9,8 @@ import {
   parseLooseTime,
   paymentLabel,
 } from '@/lib/assistant/paymentParse';
+import { extractInvoiceCustomer } from '@/lib/assistant/customerExtract';
+import { nameKey } from '@/lib/assistant/nameFold';
 import { pricesEqual, qtyValidationError } from '@/lib/assistant/qty';
 import type {
   DraftCandidate,
@@ -52,6 +54,8 @@ function toPreview(resolved: DraftResolved): DraftPreview {
     invoice_date: resolved.invoice_date,
     invoice_time: resolved.invoice_time,
     pickup_date: resolved.pickup_date,
+    customer_name: resolved.customer_name || null,
+    customer_phone: resolved.customer_phone || null,
   };
 }
 
@@ -72,10 +76,19 @@ export async function resolveInvoiceDraft(
 
   let payment_type: PaymentType | null = keywords.payment_type;
   if (is_debt) payment_type = 'debt';
+  if (!is_debt && keywords.ambiguous) {
+    payment_type = null;
+    errors.push(
+      issue(
+        'payment_ambiguous',
+        'Указано несколько способов оплаты. Напишите один: наличные, Kaspi, карта или перевод.'
+      )
+    );
+  }
   if (!payment_type && keywords.paid_unspecified) {
     errors.push(issue('payment_unspecified', 'Оплата указана как «оплачено», но способ (наличные, Kaspi, карта) не назван.'));
   }
-  if (!payment_type && !is_debt) {
+  if (!payment_type && !is_debt && !keywords.ambiguous) {
     errors.push(issue('payment_missing', 'Способ оплаты не указан. Напишите наличные, Kaspi, карта или долг.'));
   }
 
@@ -196,7 +209,8 @@ export async function resolveInvoiceDraft(
     }
   }
 
-  const phone = phones[0] || '';
+  const extractedEarly = extractInvoiceCustomer(originalText, seller_name);
+  const phone = extractedEarly.phone || phones[0] || '';
   if (is_debt && !phone) {
     errors.push(issue('debt_phone', 'Для долга нужен телефон. Он не отправляется в ИИ, укажите его в накладной.'));
   }
@@ -216,6 +230,15 @@ export async function resolveInvoiceDraft(
   if (parsed.note) commentParts.push(parsed.note.slice(0, 200));
   const comment = is_debt ? null : commentParts.join('. ') || null;
 
+  const extracted = extractInvoiceCustomer(originalText, seller_name);
+  const parsedCustomer = String(parsed.customer_name || '').trim() || null;
+  const parsedCustomerOk =
+    parsedCustomer && (!seller_name || nameKey(parsedCustomer) !== nameKey(seller_name))
+      ? parsedCustomer
+      : null;
+  const customer_phone = extracted.phone || phone || null;
+  const customer_name = extracted.name || parsedCustomerOk;
+
   const resolved: DraftResolved = {
     seller_id,
     seller_name,
@@ -231,7 +254,9 @@ export async function resolveInvoiceDraft(
     invoice_date,
     invoice_time,
     comment,
-    debt_customer_name: is_debt ? seller_name : null,
+    customer_name,
+    customer_phone,
+    debt_customer_name: is_debt ? customer_name : null,
     debt_due_at: null,
     debt_note: is_debt ? parsed.note || null : null,
     items,
@@ -338,16 +363,17 @@ export async function revalidateResolved(
     is_preorder: resolved.is_preorder && !resolved.is_debt,
     pickup_date: resolved.is_preorder ? resolved.pickup_date : null,
   };
-  const phone = (debtPhone || '').trim();
+  const phone = (resolved.customer_phone || debtPhone || '').trim();
+  const customerName = (resolved.customer_name || resolved.debt_customer_name || '').trim() || null;
   if (phone) payload.customer_phone = phone;
-  if (resolved.debt_customer_name) payload.customer_name = resolved.debt_customer_name;
+  if (customerName) payload.customer_name = customerName;
   if (resolved.is_debt) {
     if (!phone) {
       return { ok: false, errors: [issue('debt_phone', 'Для долга нужен телефон.')], payload: null };
     }
     payload.is_debt = true;
     payload.debt_customer_phone = phone;
-    payload.debt_customer_name = resolved.debt_customer_name;
+    payload.debt_customer_name = customerName;
     payload.debt_due_at = resolved.debt_due_at;
     payload.debt_note = resolved.debt_note;
   }
@@ -365,6 +391,8 @@ export type DraftEditInput = {
   pickup_date: string | null;
   items: { product_id?: string; qty: number; is_gift: boolean; raw_name?: string }[];
   note?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
 };
 
 export async function applyDraftEdit(db: SupabaseClient, input: DraftEditInput, debtPhone: string | null): Promise<ResolveResult> {
@@ -553,7 +581,9 @@ export async function applyDraftEdit(db: SupabaseClient, input: DraftEditInput, 
     invoice_date,
     invoice_time,
     comment: is_debt ? null : commentParts.join('. ') || null,
-    debt_customer_name: is_debt ? seller_name : null,
+    customer_name: input.customer_name || null,
+    customer_phone: input.customer_phone || debtPhone || null,
+    debt_customer_name: is_debt ? input.customer_name || null : null,
     debt_due_at: null,
     debt_note: is_debt ? input.note || null : null,
     items,

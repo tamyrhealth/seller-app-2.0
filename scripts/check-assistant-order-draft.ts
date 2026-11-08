@@ -173,9 +173,10 @@ const sample = `Айгүл 87771234567\n2 порошок\nШай 3\n04.11.2026\n
 if (!looksLikeInvoice(sample)) fail('sample packing slip should look like invoice');
 if (looksLikeInvoice('Сколько порошка в Астане?')) fail('stock question is not an invoice');
 const phones = extractPhones(sample);
-if (!phones.some((p) => p.endsWith('7771234567') || p.includes('7771234567') || p.endsWith('87771234567'))) {
+if (!phones.some((p) => p.replace(/\D/g, '').endsWith('7771234567'))) {
   fail('phone extract');
 }
+if (phones[0] && !phones[0].startsWith('+7')) fail('phone extract must store KZ canon +7');
 const masked = stripIdentifiers(sample);
 if (masked.includes('87771234567')) fail('phone must be masked before the model');
 if (!masked.includes('скрыто')) fail('mask token');

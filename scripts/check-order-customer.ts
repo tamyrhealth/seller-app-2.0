@@ -215,7 +215,7 @@ for (const src of [admin, seller]) {
 }
 const handle = read('lib/assistant/handleTurn.ts');
 if (handle.includes('is_debt ? phones[0]')) fail('AI must keep invoice phone for all orders');
-if (!handle.includes('customer_phone: phones[0] || null')) fail('AI draft stores extracted phone');
+if (!handle.includes('phones[0] || null')) fail('AI draft stores extracted phone');
 const tools = read('lib/assistant/tools.ts');
 if (/customer_phone|debt_customer_phone|customer_phone_canon/.test(tools)) fail('assistant tools must not select phones');
 const idem = read('lib/orderIdempotency.ts');
