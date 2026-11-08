@@ -67,6 +67,10 @@ export function startOfMonthYmd(dateStr: string): string {
   return `${dateStr.slice(0, 8)}01`;
 }
 
+export function startOfYearYmd(dateStr: string): string {
+  return `${dateStr.slice(0, 4)}-01-01`;
+}
+
 /** Полуоткрытый диапазон [fromYmd 00:00 TZ, toYmd+1 00:00 TZ). */
 export function getYmdSpanRangeInTz(
   fromYmd: string,

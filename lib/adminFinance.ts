@@ -113,6 +113,7 @@ export type FinanceProductRow = {
 export type AdminFinanceReport = {
   revenue: number;
   recognizedOrderCount: number;
+  averageCheck: number;
   cogsKnown: number;
   cogsComplete: boolean;
   missingCostProductCount: number;
@@ -537,6 +538,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
   return {
     revenue,
     recognizedOrderCount: recognized.length,
+    averageCheck: recognized.length > 0 ? money(revenue / recognized.length) : 0,
     cogsKnown,
     cogsComplete,
     missingCostProductCount,

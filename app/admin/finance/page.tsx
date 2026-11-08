@@ -29,6 +29,7 @@ import {
 import {
   buildFinanceDaily,
   expensesForCityView,
+  FINANCE_PERIOD_PRESETS,
   financeCogsKpi,
   financeGrossKpi,
   financeMarginKpi,
@@ -53,7 +54,9 @@ function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
 }
 
-const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+function formatCount(n: number) {
+  return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
+}
 
 function rpcMessage(error: { message?: string } | null | undefined): string {
   return error?.message || '';
@@ -101,8 +104,8 @@ function KpiCard({
 function FinanceSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-        {[0, 1, 2, 3, 4, 5].map((i) => (
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
           <div key={i} className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-white shadow-sm" />
         ))}
       </div>
@@ -143,9 +146,7 @@ const emptyForm = (today: string): ExpenseForm => ({
 export default function AdminFinancePage() {
   const { t } = useTranslation();
   const today = getTodayLocalISO('Asia/Almaty');
-  const [mode, setMode] = useState<FinancePeriodMode>('month');
-  const [year, setYear] = useState(() => Number(today.slice(0, 4)));
-  const [month, setMonth] = useState(() => Number(today.slice(5, 7)));
+  const [mode, setMode] = useState<FinancePeriodMode>('thisMonth');
   const [customFrom, setCustomFrom] = useState(today);
   const [customTo, setCustomTo] = useState(today);
   const [cityId, setCityId] = useState<string | 'all'>('all');
@@ -167,14 +168,10 @@ export default function AdminFinancePage() {
   const [historyRows, setHistoryRows] = useState<FinanceExpenseEventRow[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const operationIdRef = useRef(newClientOperationId());
-  const years = useMemo(() => {
-    const y = Number(today.slice(0, 4));
-    return [y - 2, y - 1, y, y + 1];
-  }, [today]);
 
   const spec = useMemo(
-    () => resolveFinanceRange({ mode, year, month, customFrom, customTo }),
-    [mode, year, month, customFrom, customTo]
+    () => resolveFinanceRange({ mode, customFrom, customTo }),
+    [mode, customFrom, customTo]
   );
 
   useEffect(() => {
@@ -419,53 +416,23 @@ export default function AdminFinancePage() {
             <p className="mt-1 text-sm text-slate-500">{t('finance.subtitle')}</p>
           </div>
 
-          <div className="mb-4 flex flex-wrap gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label className="text-sm text-slate-600">
-              {t('finance.year')}
-              <select
-                className="ml-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-                value={year}
-                disabled={mode === 'custom'}
-                onChange={(e) => {
-                  setMode('month');
-                  setYear(Number(e.target.value));
-                }}
-              >
-                {years.map((y) => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm text-slate-600">
-              {t('finance.month')}
-              <select
-                className="ml-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-                value={month}
-                disabled={mode === 'custom'}
-                onChange={(e) => {
-                  setMode('month');
-                  setMonth(Number(e.target.value));
-                }}
-              >
-                {MONTHS.map((m) => (
-                  <option key={m} value={m}>
-                    {padMonth(m)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                checked={mode === 'custom'}
-                onChange={(e) => setMode(e.target.checked ? 'custom' : 'month')}
-              />
-              {t('finance.customPeriod')}
-            </label>
+          <div className="mb-4 space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap gap-2">
+              {FINANCE_PERIOD_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setMode(p.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm ${
+                    mode === p.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  {t(p.labelKey)}
+                </button>
+              ))}
+            </div>
             {mode === 'custom' ? (
-              <>
+              <div className="flex flex-wrap gap-3">
                 <label className="text-sm text-slate-600">
                   {t('admin.fromDate')}
                   <input
@@ -484,9 +451,9 @@ export default function AdminFinancePage() {
                     onChange={(e) => setCustomTo(e.target.value)}
                   />
                 </label>
-              </>
+              </div>
             ) : null}
-            <label className="text-sm text-slate-600">
+            <label className="block text-sm text-slate-600">
               {t('common.city')}
               <select
                 className="ml-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"
@@ -537,8 +504,18 @@ export default function AdminFinancePage() {
                 </p>
               ) : null}
 
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <KpiCard label={t('finance.revenue')} value={`${formatMoney(report.revenue)} ₸`} tone="blue" />
+                <KpiCard
+                  label={t('finance.orderCount')}
+                  value={formatCount(report.recognizedOrderCount)}
+                  tone="blue"
+                />
+                <KpiCard
+                  label={t('finance.avgCheck')}
+                  value={`${formatMoney(report.averageCheck)} ₸`}
+                  tone="blue"
+                />
                 <KpiCard
                   label={t('finance.cogs')}
                   value={kpiText(cogsKpi)}
@@ -905,8 +882,4 @@ export default function AdminFinancePage() {
       </div>
     </Protected>
   );
-}
-
-function padMonth(m: number): string {
-  return String(m).padStart(2, '0');
 }

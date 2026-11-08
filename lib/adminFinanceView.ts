@@ -6,9 +6,41 @@ import {
   type FinanceExpenseRow,
   type FinanceOrder,
 } from '@/lib/adminFinance';
-import { addDaysYmd, getYmdSpanRangeInTz, ymdInTz } from '@/lib/datetime';
+import { resolvePeriod, type StatsPeriodPreset } from '@/lib/adminStats';
+import { addDaysYmd, getTodayLocalISO, getYmdSpanRangeInTz, startOfYearYmd, ymdInTz } from '@/lib/datetime';
 
-export type FinancePeriodMode = 'month' | 'custom';
+export type FinancePeriodMode =
+  | 'today'
+  | 'yesterday'
+  | 'last7'
+  | 'last30'
+  | 'thisMonth'
+  | 'lastMonth'
+  | 'last90'
+  | 'thisYear'
+  | 'custom';
+
+export const FINANCE_PERIOD_PRESETS: { id: FinancePeriodMode; labelKey: string }[] = [
+  { id: 'today', labelKey: 'stats.today' },
+  { id: 'yesterday', labelKey: 'stats.yesterday' },
+  { id: 'last7', labelKey: 'stats.last7' },
+  { id: 'last30', labelKey: 'stats.last30' },
+  { id: 'thisMonth', labelKey: 'stats.thisMonth' },
+  { id: 'lastMonth', labelKey: 'stats.lastMonth' },
+  { id: 'last90', labelKey: 'finance.last90' },
+  { id: 'thisYear', labelKey: 'finance.thisYear' },
+  { id: 'custom', labelKey: 'finance.customPeriod' },
+];
+
+const STATS_ALIGNED_PRESETS: StatsPeriodPreset[] = [
+  'today',
+  'yesterday',
+  'last7',
+  'last30',
+  'thisMonth',
+  'lastMonth',
+  'custom',
+];
 
 export type FinanceDailyPoint = {
   date: string;
@@ -37,20 +69,25 @@ export function monthRangeYmd(year: number, month: number): { fromYmd: string; t
 
 export function resolveFinanceRange(opts: {
   mode: FinancePeriodMode;
-  year: number;
-  month: number;
   customFrom: string;
   customTo: string;
+  todayYmd?: string;
 }): { fromYmd: string; toYmd: string; range: { from: Date; toNext: Date } } | null {
+  const today = opts.todayYmd || getTodayLocalISO('Asia/Almaty');
+  if ((STATS_ALIGNED_PRESETS as string[]).includes(opts.mode)) {
+    const spec = resolvePeriod(opts.mode as StatsPeriodPreset, opts.customFrom, opts.customTo, today);
+    return spec ? { fromYmd: spec.fromYmd, toYmd: spec.toYmd, range: spec.range } : null;
+  }
   let fromYmd: string;
   let toYmd: string;
-  if (opts.mode === 'month') {
-    const span = monthRangeYmd(opts.year, opts.month);
-    fromYmd = span.fromYmd;
-    toYmd = span.toYmd;
+  if (opts.mode === 'last90') {
+    fromYmd = addDaysYmd(today, -89);
+    toYmd = today;
+  } else if (opts.mode === 'thisYear') {
+    fromYmd = startOfYearYmd(today);
+    toYmd = today;
   } else {
-    fromYmd = opts.customFrom;
-    toYmd = opts.customTo;
+    return null;
   }
   if (!fromYmd || !toYmd || fromYmd > toYmd) return null;
   return { fromYmd, toYmd, range: getYmdSpanRangeInTz(fromYmd, toYmd, 'Asia/Almaty') };

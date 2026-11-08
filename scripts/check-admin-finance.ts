@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { isConfirmedInRange, sumConfirmedInRange } from '../lib/accounting';
+import { buildAdminStats, resolvePeriod, type StatsOrder } from '../lib/adminStats';
+import { addDaysYmd, startOfYearYmd } from '../lib/datetime';
 import {
   buildAdminFinance,
   FINANCE_CARGO_CUSTOMS_CATEGORY,
@@ -21,6 +23,7 @@ import {
 } from '../lib/adminFinance';
 import {
   expensesForCityView,
+  FINANCE_PERIOD_PRESETS,
   financeGrossKpi,
   financeNetKpi,
   isSessionOnlyExpenseCompleteness,
@@ -78,6 +81,7 @@ function report(partial: Partial<BuildAdminFinanceInput> = {}) {
 // --- empty period ---
 const empty = report({ orders: [] });
 if (empty.revenue !== 0 || empty.recognizedOrderCount !== 0) fail('empty revenue');
+if (empty.averageCheck !== 0 || Number.isNaN(empty.averageCheck)) fail('empty average check must be 0');
 if (empty.cogsKnown !== 0 || empty.cogsComplete !== true) fail('empty cogs');
 if (empty.estimatedGrossProfit !== 0) fail('empty gross');
 if (empty.estimatedNetProfit !== 0) fail('empty net with expenses marked complete');
@@ -99,6 +103,7 @@ const cancelled = report({
   ],
 });
 if (cancelled.revenue !== 0 || cancelled.recognizedOrderCount !== 0) fail('cancelled must not enter revenue');
+if (cancelled.averageCheck !== 0) fail('cancelled average check');
 if (cancelled.cogsKnown !== 0) fail('cancelled must not enter cogs');
 if (isConfirmedInRange({ ...paid, status: 'canceled' }, range)) fail('accounting must reject cancelled');
 
@@ -116,6 +121,7 @@ const unpaidDebt: FinanceOrder = {
 };
 const unpaid = report({ orders: [unpaidDebt] });
 if (unpaid.revenue !== 0) fail('unpaid debt is not revenue');
+if (unpaid.recognizedOrderCount !== 0 || unpaid.averageCheck !== 0) fail('unpaid debt is not a recognized sale');
 
 const repaid: FinanceOrder = {
   ...unpaidDebt,
@@ -125,6 +131,7 @@ const repaid: FinanceOrder = {
 };
 const repaidR = report({ orders: [repaid] });
 if (repaidR.revenue !== 8000) fail('repayment is revenue on debt_paid_at');
+if (repaidR.recognizedOrderCount !== 1 || repaidR.averageCheck !== 8000) fail('repayment counts as one sale');
 
 const repaidLater: FinanceOrder = {
   ...repaid,
@@ -151,6 +158,7 @@ const pendingPre: FinanceOrder = {
   ],
 };
 if (report({ orders: [pendingPre] }).revenue !== 0) fail('unfulfilled preorder is not revenue');
+if (report({ orders: [pendingPre] }).recognizedOrderCount !== 0) fail('unfulfilled preorder is not a sale');
 
 const fulfilledPre: FinanceOrder = {
   ...pendingPre,
@@ -158,6 +166,7 @@ const fulfilledPre: FinanceOrder = {
   fulfilled_at: '2026-11-08T15:00:00.000Z',
 };
 if (report({ orders: [fulfilledPre] }).revenue !== 3000) fail('fulfilled preorder is revenue on fulfilled_at');
+if (report({ orders: [fulfilledPre] }).recognizedOrderCount !== 1) fail('fulfilled preorder counts as one sale');
 
 const fulfilledOtherDay: FinanceOrder = {
   ...fulfilledPre,
@@ -176,6 +185,7 @@ const withGift: FinanceOrder = {
 };
 const giftR = report({ orders: [withGift] });
 if (giftR.revenue !== 10000) fail('gift does not add revenue');
+if (giftR.recognizedOrderCount !== 1 || giftR.averageCheck !== 10000) fail('gift does not create a second sale');
 if (giftR.cogsKnown !== 3000) fail('gift qty must enter cogs: 3 * 1000');
 if (giftR.giftCogsKnown !== 1000) fail('gift cogs isolated');
 if (giftR.productRows[0].qtySold !== 2 || giftR.productRows[0].qtyGift !== 1) fail('gift qty on product row');
@@ -396,17 +406,90 @@ if (giftR.warnings.includes('cogs_is_current_catalog_not_historical') === false)
 
 const nov = monthRangeYmd(2026, 11);
 if (nov.fromYmd !== '2026-11-01' || nov.toYmd !== '2026-11-30') fail('month bounds');
-const resolved = resolveFinanceRange({
-  mode: 'month',
-  year: 2026,
-  month: 11,
-  customFrom: '',
-  customTo: '',
-});
-if (!resolved || resolved.fromYmd !== '2026-11-01') fail('resolve month range');
-if (resolveFinanceRange({ mode: 'custom', year: 2026, month: 11, customFrom: '2026-11-10', customTo: '2026-11-01' })) {
-  fail('invalid custom range');
+
+const TODAY = '2026-11-08';
+function finRange(mode: Parameters<typeof resolveFinanceRange>[0]['mode'], customFrom = '', customTo = '') {
+  return resolveFinanceRange({ mode, customFrom, customTo, todayYmd: TODAY });
 }
+
+const todayR = finRange('today');
+if (!todayR || todayR.fromYmd !== TODAY || todayR.toYmd !== TODAY) fail('today ymd');
+if (todayR.range.from.toISOString() !== '2026-11-07T19:00:00.000Z') fail('today from Almaty midnight');
+if (todayR.range.toNext.toISOString() !== '2026-11-08T19:00:00.000Z') fail('today toNext Almaty midnight');
+
+const yest = finRange('yesterday');
+if (!yest || yest.fromYmd !== '2026-11-07' || yest.toYmd !== '2026-11-07') fail('yesterday');
+
+const last7 = finRange('last7');
+if (!last7 || last7.fromYmd !== '2026-11-02' || last7.toYmd !== TODAY) fail('last7 inclusive');
+
+const last30 = finRange('last30');
+if (!last30 || last30.fromYmd !== addDaysYmd(TODAY, -29) || last30.toYmd !== TODAY) fail('last30 inclusive');
+
+const thisMonth = finRange('thisMonth');
+if (!thisMonth || thisMonth.fromYmd !== '2026-11-01' || thisMonth.toYmd !== TODAY) fail('thisMonth to today not month-end');
+
+const lastMonth = finRange('lastMonth');
+if (!lastMonth || lastMonth.fromYmd !== '2026-10-01' || lastMonth.toYmd !== '2026-10-31') fail('lastMonth October');
+
+const jan = resolveFinanceRange({ mode: 'lastMonth', customFrom: '', customTo: '', todayYmd: '2026-01-08' });
+if (!jan || jan.fromYmd !== '2025-12-01' || jan.toYmd !== '2025-12-31') fail('lastMonth year wrap');
+
+const leap = resolveFinanceRange({ mode: 'lastMonth', customFrom: '', customTo: '', todayYmd: '2024-03-05' });
+if (!leap || leap.fromYmd !== '2024-02-01' || leap.toYmd !== '2024-02-29') fail('lastMonth leap February');
+
+const last90 = finRange('last90');
+if (!last90 || last90.fromYmd !== addDaysYmd(TODAY, -89) || last90.toYmd !== TODAY) fail('last90 inclusive');
+if (last90.fromYmd !== '2026-08-11') fail('last90 calendar start');
+
+const thisYear = finRange('thisYear');
+if (!thisYear || thisYear.fromYmd !== '2026-01-01' || thisYear.toYmd !== TODAY) fail('thisYear to today');
+if (thisYear.fromYmd !== startOfYearYmd(TODAY)) fail('thisYear uses startOfYearYmd');
+if (thisYear.range.from.toISOString() !== '2025-12-31T19:00:00.000Z') fail('thisYear Almaty start');
+
+const nye = resolveFinanceRange({ mode: 'thisYear', customFrom: '', customTo: '', todayYmd: '2026-01-01' });
+if (!nye || nye.fromYmd !== '2026-01-01' || nye.toYmd !== '2026-01-01') fail('thisYear on Jan 1');
+
+const customOk = finRange('custom', '2026-11-01', '2026-11-08');
+if (!customOk || customOk.fromYmd !== '2026-11-01' || customOk.toYmd !== TODAY) fail('custom range');
+if (finRange('custom', '2026-11-10', '2026-11-01')) fail('invalid custom range');
+
+for (const mode of ['today', 'yesterday', 'last7', 'last30', 'thisMonth', 'lastMonth'] as const) {
+  const financeSpec = finRange(mode);
+  const statsSpec = resolvePeriod(mode, '', '', TODAY);
+  if (!financeSpec || !statsSpec) fail(`missing ${mode} spec`);
+  if (financeSpec.fromYmd !== statsSpec.fromYmd || financeSpec.toYmd !== statsSpec.toYmd) {
+    fail(`finance ${mode} must match stats`);
+  }
+  if (financeSpec.range.from.getTime() !== statsSpec.range.from.getTime()) fail(`finance ${mode} from instant`);
+  if (financeSpec.range.toNext.getTime() !== statsSpec.range.toNext.getTime()) fail(`finance ${mode} toNext instant`);
+}
+
+if (FINANCE_PERIOD_PRESETS.map((p) => p.id).join(',') !== 'today,yesterday,last7,last30,thisMonth,lastMonth,last90,thisYear,custom') {
+  fail('preset order');
+}
+
+const twoSales = report({ orders: [paid, repaid] });
+if (twoSales.recognizedOrderCount !== 2) fail('two recognized sales');
+if (twoSales.averageCheck !== 9000) fail('average check 18000/2');
+
+const statsSameOrders = [paid, repaid, unpaidDebt, pendingPre, { ...paid, id: 'o-cancel', status: 'canceled' }] as StatsOrder[];
+const statsSame = buildAdminStats({
+  orders: statsSameOrders,
+  unpaidDebts: [],
+  range,
+  sellerId: 'all',
+  cityId: 'all',
+  productId: 'all',
+  sellerNames: new Map(),
+  deletedSellerLabel: 'deleted',
+});
+const financeSame = report({
+  orders: statsSameOrders,
+});
+if (statsSame.revenue !== financeSame.revenue) fail('finance revenue must match stats');
+if (statsSame.orderCount !== financeSame.recognizedOrderCount) fail('finance order count must match stats');
+if (Number(statsSame.averageCheck.toFixed(2)) !== financeSame.averageCheck) fail('finance AOV must match stats');
 
 const citySplit = expensesForCityView(
   [
@@ -454,7 +537,11 @@ const managerNav = read('components/NavManager.tsx');
 if (!existsSync(join(process.cwd(), 'app/admin/finance/page.tsx'))) fail('finance page missing');
 if (!page.includes('Protected role="admin"')) fail('admin-only finance page');
 if (!page.includes('bg-slate-50') || !page.includes('rounded-2xl') || !page.includes('max-w-6xl')) fail('dashboard visual language');
-if (!page.includes('grid-cols-2') || !page.includes('lg:grid-cols-3')) fail('kpi grid');
+if (!page.includes('grid-cols-2') || !page.includes('lg:grid-cols-4')) fail('kpi grid');
+if (!page.includes('FINANCE_PERIOD_PRESETS') || !page.includes("setMode(p.id)")) fail('period chips');
+if (!page.includes('finance.orderCount') || !page.includes('finance.avgCheck')) fail('sale count kpi');
+if (!page.includes('recognizedOrderCount') || !page.includes('averageCheck')) fail('recognized sale fields');
+if (page.includes("setMode('month')") || page.includes('padMonth')) fail('old month picker must be gone');
 if (!page.includes('FinanceSkeleton') || !page.includes('animate-pulse')) fail('skeleton');
 if (!page.includes('let cancelled = false')) fail('load cancel flag');
 if (page.includes('[spec, refreshKey, t]') || page.includes(', t]')) fail('effects must not depend on unstable t');
@@ -481,6 +568,18 @@ if (page.includes('lucide')) fail('no new icon library');
 if (!nav.includes('href="/admin/finance"') || !nav.includes("t('finance.nav')")) fail('nav finance');
 if (managerNav.includes('/admin/finance')) fail('manager must not get finance nav');
 if (!i18n.includes("'finance.nav': 'Финансы'") || !i18n.includes("'finance.nav': 'Қаржы'")) fail('i18n nav');
+if (!i18n.includes("'finance.revenue': 'Признанная выручка'") || !i18n.includes("'finance.revenue': 'Мойындалған түсім'")) {
+  fail('i18n recognized revenue');
+}
+if (!i18n.includes("'finance.cogs': 'Оценочная себестоимость'") || !i18n.includes("'finance.cogs': 'Бағаланған өзіндік құн'")) {
+  fail('i18n estimated cogs');
+}
+if (!i18n.includes("'finance.net': 'Оценочная чистая прибыль'") || !i18n.includes("'finance.net': 'Бағаланған таза пайда'")) {
+  fail('i18n estimated net');
+}
+if (!page.includes('fetchRecognizedWindow') || !page.includes('finance.truncated')) fail('same order window and truncation banner');
+if (!read('lib/fetchAdminStatsOrders.ts').includes('ORDER_STATS_MAX')) fail('order cap still in fetch');
+if (!read('lib/accounting.ts').includes('getAccountingDate')) fail('accounting module intact');
 if (!i18n.includes("'finance.permissionDenied':") || !i18n.includes("'finance.networkError':")) fail('i18n rpc errors');
 const financeRu = [...i18n.matchAll(/'(finance\.[^']+)':/g)].map((m) => m[1]);
 const ruSet = new Set(financeRu.slice(0, financeRu.length / 2));

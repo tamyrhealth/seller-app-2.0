@@ -174,8 +174,13 @@ export type PeriodSpec = {
   range: { from: Date; toNext: Date };
 };
 
-export function resolvePeriod(preset: StatsPeriodPreset, customFrom?: string, customTo?: string): PeriodSpec | null {
-  const today = getTodayLocalISO('Asia/Almaty');
+export function resolvePeriod(
+  preset: StatsPeriodPreset,
+  customFrom?: string,
+  customTo?: string,
+  todayYmd?: string
+): PeriodSpec | null {
+  const today = todayYmd || getTodayLocalISO('Asia/Almaty');
   let fromYmd = today;
   let toYmd = today;
   if (preset === 'today') {
