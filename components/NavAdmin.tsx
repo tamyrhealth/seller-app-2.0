@@ -35,6 +35,12 @@ export default function NavAdmin() {
         {t('admin.orders')}
       </Link>
       <Link
+        href="/admin/activity"
+        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
+      >
+        {t('admin.activity')}
+      </Link>
+      <Link
         href="/admin/products"
         className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
       >

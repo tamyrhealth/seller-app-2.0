@@ -1,0 +1,115 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import {
+  ACTIVITY_PAGE_SIZE,
+  activityCancelReturnedStock,
+  activityItems,
+  activityOrderHref,
+  activityOrderNumber,
+  activityPageRange,
+  activityTotalSum,
+  applyActivityLogFilters,
+  isActivityDateRangeInvalid,
+} from '../lib/adminActivity';
+import { orderHistoryActionLabel } from '../lib/orderActionHistory';
+
+function fail(msg: string): never {
+  console.error('FAIL', msg);
+  process.exit(1);
+}
+
+function read(rel: string) {
+  return readFileSync(join(process.cwd(), rel), 'utf8');
+}
+
+if (ACTIVITY_PAGE_SIZE !== 50) fail('page size must be 50');
+if (activityPageRange(1).from !== 0 || activityPageRange(1).to !== 49) fail('page 1 range');
+if (activityPageRange(2).from !== 50 || activityPageRange(2).to !== 99) fail('page 2 range');
+if (activityPageRange(0).page !== 1) fail('invalid page becomes 1');
+if (!isActivityDateRangeInvalid('2026-11-08', '2026-11-01')) fail('end before start is invalid');
+if (isActivityDateRangeInvalid('2026-11-01', '2026-11-08')) fail('valid range flagged');
+if (activityOrderHref('abc-id') !== '/admin/orders?id=abc-id') fail('order href');
+if (activityOrderNumber({ order_number: 'N000001' }) !== 'N000001') fail('order number from details');
+if (activityOrderNumber({}) !== null) fail('missing number must stay empty');
+if (activityTotalSum({}) !== null) fail('missing sum must stay empty');
+if (activityTotalSum({ total_sum: 1500 }) !== 1500) fail('sum from details');
+if (activityCancelReturnedStock({ already_canceled: true, returned_stock: false }) !== null) {
+  fail('repeat cancel must not claim stock');
+}
+if (activityCancelReturnedStock({ returned_stock: true }) !== true) fail('cancel returned stock');
+if (activityItems({}).length !== 0) fail('missing items stay empty');
+if (orderHistoryActionLabel('order_cancel', { already_canceled: true }) !== 'Повторный запрос отмены — заказ уже отменён') {
+  fail('repeat cancel label');
+}
+if (orderHistoryActionLabel('preorder_create') !== 'Создание предзаказа') fail('preorder label');
+if (orderHistoryActionLabel('debt_create') !== 'Создание долга') fail('debt label');
+if (orderHistoryActionLabel('preorder_fulfill') !== 'Выдача предзаказа') fail('fulfill label');
+if (orderHistoryActionLabel('debt_pay') !== 'Оплата долга') fail('debt pay label');
+
+const calls: string[] = [];
+const chain = {
+  eq(column: string) {
+    calls.push(`eq:${column}`);
+    return chain;
+  },
+  gte(column: string) {
+    calls.push(`gte:${column}`);
+    return chain;
+  },
+  lt(column: string) {
+    calls.push(`lt:${column}`);
+    return chain;
+  },
+};
+applyActivityLogFilters(chain, {
+  fromISO: 'a',
+  toNextISO: 'b',
+  userId: 'u1',
+  action: 'order_create',
+  entityId: 'oid',
+});
+const rangeAt = calls.findIndex((c) => c.startsWith('gte:'));
+const userAt = calls.indexOf('eq:user_id');
+if (calls[0] !== 'eq:entity_type') fail('must restrict entity_type=order first');
+if (rangeAt < 0 || userAt < rangeAt) fail('date filters must apply before user/action/id');
+if (!calls.includes('eq:action') || !calls.includes('eq:entity_id')) fail('action and order id filters');
+if (calls.some((c) => c.includes('city'))) fail('city filter is not proven without SQL');
+
+const page = read('app/admin/activity/page.tsx');
+const helper = read('lib/adminActivity.ts');
+const nav = read('components/NavAdmin.tsx');
+const i18n = read('lib/i18n.tsx');
+const actionLog = read('lib/actionLog.ts');
+
+if (!page.includes('Protected role="admin"')) fail('page must be admin-only');
+if (!page.includes('fetchAdminOrderActivity')) fail('page must use server-side activity query');
+if (!page.includes('setPage(1)')) fail('filters must reset to first page');
+if (!page.includes('orderHistoryActionLabel')) fail('human action labels');
+if (page.includes('JSON.stringify')) fail('must not dump JSON');
+if (page.includes('filterCity') || helper.includes('city_id')) fail('city filter not allowed in this stage');
+if (!page.includes('admin.activityEmpty') || !page.includes('admin.activityError') || !page.includes('admin.activityLoading')) {
+  fail('loading/empty/error states');
+}
+if (!page.includes('admin.activityOpenOrder')) fail('link to order');
+if (!nav.includes('href="/admin/activity"')) fail('nav link');
+if (!i18n.includes("'admin.activityTitle': 'История действий с заказами'")) fail('ru title');
+if (!i18n.includes("'admin.activityTitle': 'Тапсырыс әрекеттерінің тарихы'")) fail('kz title');
+if (!helper.includes('.order(') || !helper.includes('.range(')) fail('order then range pagination');
+const fetchFn = helper.slice(helper.indexOf('export async function fetchAdminOrderActivity'));
+const applyAt = fetchFn.indexOf('applyActivityLogFilters');
+const rangeAtSrc = fetchFn.indexOf('.range(');
+if (applyAt < 0 || rangeAtSrc < 0 || rangeAtSrc < applyAt) fail('filters must run before range/limit');
+if (!helper.includes("eq('order_number'")) fail('search must resolve order number on server');
+if (!helper.includes('parseOrderNumberQuery')) fail('canonical order-number search');
+if (!helper.includes("{ count: 'exact' }")) fail('pagination needs total count');
+if (actionLog.includes(".from('action_logs').insert")) fail('client must not insert action_logs');
+if (page.includes(".insert") && page.includes('action_logs')) fail('page must not write logs');
+if (page.includes(".from('action_logs')")) fail('page must query through helper, not ad-hoc');
+
+const migrations = read('supabase/migrations/20261107200000_action_logs_protect_and_order_history.sql');
+if (/CREATE OR REPLACE FUNCTION public\.confirm_order/i.test(migrations)) fail('must not rewrite confirm_order');
+if (/CREATE OR REPLACE FUNCTION public\.apply_order_cancel_report/i.test(page + helper)) {
+  fail('must not touch cancel RPC');
+}
+
+console.log('admin-activity checks ok');
