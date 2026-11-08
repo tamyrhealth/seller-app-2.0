@@ -36,6 +36,7 @@ import {
   monthRangeYmd,
   ordersForCityView,
   resolveFinanceRange,
+  sortFinanceSellerRows,
 } from '../lib/adminFinanceView';
 
 function fail(msg: string): never {
@@ -91,7 +92,7 @@ if (empty.averageCheck !== 0 || Number.isNaN(empty.averageCheck)) fail('empty av
 if (empty.cogsKnown !== 0 || empty.cogsComplete !== true) fail('empty cogs');
 if (empty.estimatedGrossProfit !== 0) fail('empty gross');
 if (empty.estimatedNetProfit !== 0) fail('empty net with expenses marked complete');
-if (empty.cityRows.length !== 0 || empty.productRows.length !== 0) fail('empty rows');
+if (empty.cityRows.length !== 0 || empty.productRows.length !== 0 || empty.sellerRows.length !== 0) fail('empty rows');
 if (!empty.warnings.includes('zero_revenue')) fail('empty zero-revenue warning');
 
 const emptyIncomplete = report({ orders: [], expensesInputComplete: false });
@@ -576,6 +577,86 @@ if (debtSnap([{ ...debtBase, created_at: '2025-01-01T00:00:00.000Z' }]).unpaidDe
   fail('open AR is not limited to the P&L period');
 }
 
+const sellerNamesFinance = new Map([['s1', 'Айдар'], ['s2', 'Болат']]);
+const s1 = report({
+  orders: [{ ...paid, seller_id: 's1' }],
+  sellerNames: sellerNamesFinance,
+});
+if (s1.sellerRows.length !== 1 || s1.sellerRows[0].sellerName !== 'Айдар') fail('one seller');
+if (s1.sellerRows[0].cityName !== 'Атырау' || s1.sellerRows[0].orderCount !== 1) fail('seller city and count');
+if (s1.sellerRows[0].revenue !== 10000 || s1.sellerRows[0].cogsKnown !== 2000) fail('seller revenue/cogs');
+if (s1.sellerRows[0].estimatedGrossProfit !== 8000 || s1.sellerRows[0].grossMarginPct !== 80) fail('seller gross/margin');
+
+const s2order: FinanceOrder = {
+  ...paid,
+  id: 'o-s2',
+  seller_id: 's2',
+  city_id: 'c2',
+  total_sum: 4000,
+  order_items: [
+    { product_id: 'p1', qty: 1, price: 4000, line_sum: 4000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } },
+  ],
+};
+const twoSellers = report({
+  orders: [{ ...paid, seller_id: 's1' }, s2order],
+  sellerNames: sellerNamesFinance,
+});
+if (twoSellers.sellerRows.length !== 2) fail('two sellers');
+const sumRev = twoSellers.sellerRows.reduce((s, r) => s + r.revenue, 0);
+const sumCogs = twoSellers.sellerRows.reduce((s, r) => s + r.cogsKnown, 0);
+const sumGross = twoSellers.sellerRows.reduce((s, r) => s + (r.estimatedGrossProfit || 0), 0);
+if (sumRev !== twoSellers.revenue) fail('seller revenue must match KPI');
+if (sumCogs !== twoSellers.cogsKnown) fail('seller cogs must match KPI');
+if (sumGross !== twoSellers.estimatedGrossProfit) fail('seller gross must match KPI');
+if (twoSellers.sellerRows[0].sellerName !== 'Айдар') fail('default sort by gross');
+
+const giftOnly: FinanceOrder = {
+  ...paid,
+  id: 'o-gift-only',
+  seller_id: 's1',
+  total_sum: 0,
+  order_items: [
+    { product_id: 'p1', qty: 1, price: 0, line_sum: 0, is_gift: true, product: { name: 'Молоко', unit: 'pcs' } },
+  ],
+};
+const giftOnlyR = report({ orders: [giftOnly], sellerNames: sellerNamesFinance });
+if (giftOnlyR.sellerRows[0].revenue !== 0 || giftOnlyR.sellerRows[0].orderCount !== 1) fail('gift-only still a sale');
+if (giftOnlyR.sellerRows[0].cogsKnown !== 1000 || giftOnlyR.sellerRows[0].estimatedGrossProfit !== -1000) {
+  fail('gift-only cogs/gross');
+}
+if (giftOnlyR.sellerRows[0].grossMarginPct !== null) fail('zero revenue must not divide margin');
+
+if (report({ orders: [unpaidDebt] }).sellerRows.length !== 0) fail('unpaid debt is not a seller sale');
+if (report({ orders: [pendingPre] }).sellerRows.length !== 0) fail('pending preorder is not a seller sale');
+if (report({ orders: [{ ...paid, seller_id: 's1', status: 'canceled' }] }).sellerRows.length !== 0) {
+  fail('canceled is not a seller sale');
+}
+
+const noSeller = report({ orders: [{ ...paid, seller_id: null }], noSellerLabel: 'Без продавца' });
+if (noSeller.sellerRows[0].sellerName !== 'Без продавца' || noSeller.sellerRows[0].revenue !== 10000) {
+  fail('missing seller_id row');
+}
+const deleted = report({
+  orders: [{ ...paid, seller_id: 'deadbeef-id' }],
+  sellerNames: sellerNamesFinance,
+  deletedSellerLabel: 'Удалённый продавец',
+});
+if (!deleted.sellerRows[0].sellerName.startsWith('Удалённый продавец')) fail('deleted seller label');
+
+const missingSeller = report({
+  orders: [{ ...paid, seller_id: 's1' }],
+  costs: [{ id: 'p1', cost_price: null }],
+  sellerNames: sellerNamesFinance,
+});
+if (missingSeller.sellerRows[0].estimatedGrossProfit !== null || missingSeller.sellerRows[0].grossMarginPct !== null) {
+  fail('incomplete seller gross hidden');
+}
+if (missingSeller.estimatedGrossProfit !== null) fail('headline still hidden');
+
+const sortedMargin = sortFinanceSellerRows(twoSellers.sellerRows, 'revenue');
+if (sortedMargin[0].revenue < sortedMargin[1].revenue) fail('sort by revenue');
+if (sortFinanceSellerRows(twoSellers.sellerRows, 'orders')[0].orderCount < 1) fail('sort by orders');
+
 const citySplit = expensesForCityView(
   [
     { id: 'a', city_id: 'c1', amount: 10, category: 'ads', expense_date: '2026-11-08' },
@@ -648,6 +729,9 @@ if (!page.includes('expensesCompleteHint') || !page.includes('setExpensesComplet
 if (page.includes('writeUserUi') || page.includes('localStorage')) fail('must not persist month-close');
 if (!page.includes('finance.cogsHint') || !page.includes('finance.cargoHint')) fail('reliability copy');
 if (!page.includes('finance.companyTitle') || !page.includes('finance.byCity')) fail('report sections');
+if (!page.includes('finance.bySeller') || !page.includes('sortFinanceSellerRows')) fail('seller gross section');
+if (!page.includes('finance.noSeller') || !page.includes('finance.bySellerHint')) fail('seller copy');
+if (!page.includes('finance.sellerGross')) fail('seller gross label');
 if (!page.includes('LineChart')) fail('daily chart from existing data');
 if (page.includes('lucide')) fail('no new icon library');
 if (!nav.includes('href="/admin/finance"') || !nav.includes("t('finance.nav')")) fail('nav finance');

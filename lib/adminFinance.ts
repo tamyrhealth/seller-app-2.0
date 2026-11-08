@@ -70,6 +70,7 @@ export type FinanceOrderItem = {
 
 export type FinanceOrder = OrderForAccounting & {
   id?: string | null;
+  seller_id?: string | null;
   city_id?: string | null;
   order_items?: FinanceOrderItem[] | null;
 };
@@ -95,6 +96,21 @@ export type FinanceCityRow = {
   companyExpensesExcluded: number;
   estimatedGrossProfit: number | null;
   estimatedNetProfit: number | null;
+};
+
+export type FinanceSellerRow = {
+  key: string;
+  sellerId: string;
+  sellerName: string;
+  cityId: string;
+  cityName: string;
+  orderCount: number;
+  revenue: number;
+  cogsKnown: number;
+  cogsComplete: boolean;
+  missingCostProductCount: number;
+  estimatedGrossProfit: number | null;
+  grossMarginPct: number | null;
 };
 
 export type FinanceProductRow = {
@@ -132,6 +148,7 @@ export type AdminFinanceReport = {
   grossMarginPct: number | null;
   netMarginPct: number | null;
   cityRows: FinanceCityRow[];
+  sellerRows: FinanceSellerRow[];
   productRows: FinanceProductRow[];
   warnings: FinanceWarningCode[];
   profitReliable: boolean;
@@ -146,6 +163,10 @@ export type BuildAdminFinanceInput = {
   costs: ProductCostRow[] | null | undefined;
   expenses: FinanceExpenseRow[] | null | undefined;
   cityNames?: Map<string, string>;
+  sellerNames?: Map<string, string>;
+  deletedSellerLabel?: string;
+  noSellerLabel?: string;
+  unnamedCityLabel?: string;
   expensesInputComplete?: boolean;
 };
 
@@ -312,6 +333,10 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     costs,
     expenses,
     cityNames,
+    sellerNames,
+    deletedSellerLabel = 'Удалённый продавец',
+    noSellerLabel = 'Без продавца',
+    unnamedCityLabel = 'Без города',
     expensesInputComplete = false,
   } = input;
 
@@ -335,6 +360,24 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     cityCargo: number;
   };
   const cityMap = new Map<string, CityAcc>();
+
+  type SellerAcc = {
+    sellerId: string;
+    sellerName: string;
+    cityId: string;
+    revenue: number;
+    orderCount: number;
+    cogsKnown: number;
+    missing: Set<string>;
+  };
+  const sellerMap = new Map<string, SellerAcc>();
+
+  const sellerIdentity = (sellerId: string | null | undefined): { id: string; name: string } => {
+    if (!sellerId) return { id: '__none__', name: noSellerLabel };
+    const named = (sellerNames?.get(sellerId) || '').trim();
+    if (named) return { id: sellerId, name: named };
+    return { id: sellerId, name: `${deletedSellerLabel} · ${sellerId.slice(0, 8)}` };
+  };
 
   type ProdAcc = {
     name: string;
@@ -364,18 +407,20 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     return acc;
   };
 
-  const addCogs = (productId: string, qty: number, isGift: boolean, city: CityAcc) => {
+  const addCogs = (productId: string, qty: number, isGift: boolean, city: CityAcc, seller: SellerAcc) => {
     if (!(qty > 0)) return;
     const unit = lookupUnitCost(costMap, productId);
     if (unit == null) {
       missingCostLineCount += 1;
       missingProducts.add(productId || '__unknown__');
       city.missing.add(productId || '__unknown__');
+      seller.missing.add(productId || '__unknown__');
       return;
     }
     const line = money(qty * unit);
     cogsKnown = money(cogsKnown + line);
     city.cogsKnown = money(city.cogsKnown + line);
+    seller.cogsKnown = money(seller.cogsKnown + line);
     if (isGift) giftCogsKnown = money(giftCogsKnown + line);
   };
 
@@ -384,6 +429,23 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     const city = ensureCity(cityId);
     city.revenue = money(city.revenue + asAmount(order.total_sum));
     city.orderCount += 1;
+    const ident = sellerIdentity(order.seller_id);
+    const sellerKey = `${ident.id}::${cityId}`;
+    let seller = sellerMap.get(sellerKey);
+    if (!seller) {
+      seller = {
+        sellerId: ident.id,
+        sellerName: ident.name,
+        cityId,
+        revenue: 0,
+        orderCount: 0,
+        cogsKnown: 0,
+        missing: new Set(),
+      };
+      sellerMap.set(sellerKey, seller);
+    }
+    seller.revenue = money(seller.revenue + asAmount(order.total_sum));
+    seller.orderCount += 1;
 
     const allocated = allocateOrderLines(order as StatsOrder);
     for (const line of allocated.lines) {
@@ -413,7 +475,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
       const qty = Number(item.qty ?? 0);
       const pid = item.product_id || productLabel(item).name;
       const gift = item.is_gift === true;
-      addCogs(pid, qty, gift, city);
+      addCogs(pid, qty, gift, city, seller);
       if (gift && qty > 0) {
         const { name, unit } = productLabel(item);
         let prod = productMap.get(pid);
@@ -504,7 +566,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
       const estimatedGross = cityCogsComplete ? money(acc.revenue - acc.cogsKnown) : null;
       return {
         cityId,
-        cityName: cityNames?.get(cityId) || (cityId === '__none__' ? 'Без города' : cityId),
+        cityName: cityNames?.get(cityId) || unnamedCityLabel,
         revenue: acc.revenue,
         orderCount: acc.orderCount,
         cogsKnown: acc.cogsKnown,
@@ -519,6 +581,34 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
       };
     })
     .sort((a, b) => b.revenue - a.revenue || a.cityName.localeCompare(b.cityName, 'ru'));
+
+  const sellerRows: FinanceSellerRow[] = Array.from(sellerMap.entries())
+    .map(([key, acc]) => {
+      const sellerCogsComplete = acc.missing.size === 0;
+      const estimatedGross = sellerCogsComplete ? money(acc.revenue - acc.cogsKnown) : null;
+      return {
+        key,
+        sellerId: acc.sellerId,
+        sellerName: acc.sellerName,
+        cityId: acc.cityId,
+        cityName: cityNames?.get(acc.cityId) || unnamedCityLabel,
+        orderCount: acc.orderCount,
+        revenue: acc.revenue,
+        cogsKnown: acc.cogsKnown,
+        cogsComplete: sellerCogsComplete,
+        missingCostProductCount: acc.missing.size,
+        estimatedGrossProfit: estimatedGross,
+        grossMarginPct:
+          acc.revenue > 0 && estimatedGross != null ? money((estimatedGross / acc.revenue) * 100) : null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        (b.estimatedGrossProfit ?? Number.NEGATIVE_INFINITY) - (a.estimatedGrossProfit ?? Number.NEGATIVE_INFINITY) ||
+        b.revenue - a.revenue ||
+        a.sellerName.localeCompare(b.sellerName, 'ru') ||
+        a.cityName.localeCompare(b.cityName, 'ru')
+    );
 
   const productRows: FinanceProductRow[] = Array.from(productMap.entries())
     .map(([productId, acc]) => ({
@@ -557,6 +647,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     grossMarginPct,
     netMarginPct,
     cityRows,
+    sellerRows,
     productRows,
     warnings,
     profitReliable,

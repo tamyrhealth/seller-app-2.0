@@ -37,8 +37,10 @@ import {
   financeNetKpi,
   ordersForCityView,
   resolveFinanceRange,
+  sortFinanceSellerRows,
   type FinanceKpi,
   type FinancePeriodMode,
+  type FinanceSellerSort,
 } from '@/lib/adminFinanceView';
 import type { ProductCostRow } from '@/lib/productCost';
 import {
@@ -151,6 +153,7 @@ export default function AdminFinancePage() {
   const [customFrom, setCustomFrom] = useState(today);
   const [customTo, setCustomTo] = useState(today);
   const [cityId, setCityId] = useState<string | 'all'>('all');
+  const [sellerSort, setSellerSort] = useState<FinanceSellerSort>('gross');
   const [cities, setCities] = useState<{ id: string; name: string }[]>([]);
   const [sellers, setSellers] = useState<{ id: string; display_name: string | null }[]>([]);
   const [orders, setOrders] = useState<FinanceOrder[]>([]);
@@ -299,6 +302,7 @@ export default function AdminFinancePage() {
   }, [sellers]);
   const deletedSellerLabel = t('admin.deletedSeller');
   const unnamedCityLabel = t('finance.noCity');
+  const noSellerLabel = t('finance.noSeller');
   const receivables = useMemo(
     () =>
       summarizeUnpaidDebts({
@@ -323,9 +327,30 @@ export default function AdminFinancePage() {
       costs: costs || [],
       expenses: pnlExpenses,
       cityNames,
+      sellerNames,
+      deletedSellerLabel,
+      noSellerLabel,
+      unnamedCityLabel,
       expensesInputComplete: expensesComplete,
     });
-  }, [spec, orders, expenses, costs, cityId, cityNames, expensesComplete]);
+  }, [
+    spec,
+    orders,
+    expenses,
+    costs,
+    cityId,
+    cityNames,
+    sellerNames,
+    deletedSellerLabel,
+    noSellerLabel,
+    unnamedCityLabel,
+    expensesComplete,
+  ]);
+
+  const sellerRows = useMemo(
+    () => (report ? sortFinanceSellerRows(report.sellerRows, sellerSort) : []),
+    [report, sellerSort]
+  );
 
   const companyExpenses = useMemo(() => expensesForCityView(expenses, cityId).companyExpenses, [expenses, cityId]);
   const daily = useMemo(() => {
@@ -723,6 +748,68 @@ export default function AdminFinancePage() {
                               {row.estimatedNetProfit == null
                                 ? t('finance.unavailable')
                                 : `${formatMoney(row.estimatedNetProfit)} ₸`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Section>
+
+              <Section title={t('finance.bySeller')} hint={t('finance.bySellerHint')}>
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {(
+                    [
+                      ['gross', 'finance.sortGross'],
+                      ['revenue', 'finance.sortRevenue'],
+                      ['orders', 'finance.sortOrders'],
+                      ['margin', 'finance.sortMargin'],
+                    ] as const
+                  ).map(([id, labelKey]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setSellerSort(id)}
+                      className={`rounded-lg px-3 py-1.5 text-sm ${
+                        sellerSort === id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      {t(labelKey)}
+                    </button>
+                  ))}
+                </div>
+                {sellerRows.length === 0 ? (
+                  <p className="text-sm text-slate-500">{t('finance.empty')}</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] text-left text-sm">
+                      <thead className="text-xs text-slate-500">
+                        <tr>
+                          <th className="pb-2 font-medium">{t('admin.seller')}</th>
+                          <th className="pb-2 font-medium">{t('common.city')}</th>
+                          <th className="pb-2 text-right font-medium">{t('finance.orderCount')}</th>
+                          <th className="pb-2 text-right font-medium">{t('finance.revenue')}</th>
+                          <th className="pb-2 text-right font-medium">{t('finance.sellerCogs')}</th>
+                          <th className="pb-2 text-right font-medium">{t('finance.sellerGross')}</th>
+                          <th className="pb-2 text-right font-medium">{t('finance.sellerMargin')}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {sellerRows.map((row) => (
+                          <tr key={row.key}>
+                            <td className="py-2">{row.sellerName}</td>
+                            <td className="py-2">{row.cityName}</td>
+                            <td className="py-2 text-right tabular-nums">{formatCount(row.orderCount)}</td>
+                            <td className="py-2 text-right tabular-nums">{formatMoney(row.revenue)} ₸</td>
+                            <td className="py-2 text-right tabular-nums">{formatMoney(row.cogsKnown)} ₸</td>
+                            <td className="py-2 text-right tabular-nums">
+                              {row.estimatedGrossProfit == null
+                                ? t('finance.unavailable')
+                                : `${formatMoney(row.estimatedGrossProfit)} ₸`}
+                            </td>
+                            <td className="py-2 text-right tabular-nums">
+                              {row.grossMarginPct == null ? t('finance.unavailable') : `${row.grossMarginPct.toFixed(1)}%`}
                             </td>
                           </tr>
                         ))}

@@ -5,6 +5,7 @@ import {
   type AdminFinanceReport,
   type FinanceExpenseRow,
   type FinanceOrder,
+  type FinanceSellerRow,
 } from '@/lib/adminFinance';
 import { resolvePeriod, type StatsPeriodPreset } from '@/lib/adminStats';
 import { addDaysYmd, getTodayLocalISO, getYmdSpanRangeInTz, startOfYearYmd, ymdInTz } from '@/lib/datetime';
@@ -104,6 +105,24 @@ export function expensesForCityView(
     pnlExpenses: live.filter((e) => e.city_id === cityId),
     companyExpenses,
   };
+}
+
+export type FinanceSellerSort = 'gross' | 'revenue' | 'orders' | 'margin';
+
+export function sortFinanceSellerRows(rows: FinanceSellerRow[], sort: FinanceSellerSort): FinanceSellerRow[] {
+  const metric = (row: FinanceSellerRow): number => {
+    if (sort === 'revenue') return row.revenue;
+    if (sort === 'orders') return row.orderCount;
+    if (sort === 'margin') return row.grossMarginPct ?? Number.NEGATIVE_INFINITY;
+    return row.estimatedGrossProfit ?? Number.NEGATIVE_INFINITY;
+  };
+  return [...rows].sort(
+    (a, b) =>
+      metric(b) - metric(a) ||
+      b.revenue - a.revenue ||
+      a.sellerName.localeCompare(b.sellerName, 'ru') ||
+      a.cityName.localeCompare(b.cityName, 'ru')
+  );
 }
 
 export function ordersForCityView(orders: FinanceOrder[], cityId: string | 'all'): FinanceOrder[] {
