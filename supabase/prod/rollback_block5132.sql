@@ -1,0 +1,25 @@
+-- 5.13.2 rollback. Do not apply until explicitly allowed.
+-- Restores confirm_order without snapshot writes. Drops admin RPC and the
+-- snapshot column. Does not DELETE orders, order_items, or inventory rows.
+-- Source of restored confirm_order: supabase/migrations/20261108180000_order_customer_fields.sql
+-- Paste that function body here only at apply time from the backup dump, not from
+-- an older confirm_order (inactive products / gifts / customer fields must stay).
+--
+-- After DROP COLUMN, restore table-level SELECT is unnecessary if remaining
+-- column grants still cover public columns. SELECT * works again once the
+-- hidden column is gone.
+--
+-- BEGIN;
+-- CREATE OR REPLACE FUNCTION public.confirm_order(payload jsonb)
+-- ... restore from backup / 20261108180000 ...
+-- REVOKE ALL ON FUNCTION public.confirm_order(jsonb) FROM PUBLIC;
+-- GRANT ALL ON FUNCTION public.confirm_order(jsonb) TO authenticated;
+-- GRANT ALL ON FUNCTION public.confirm_order(jsonb) TO service_role;
+-- DROP FUNCTION IF EXISTS public.admin_order_item_cost_snapshots(uuid[]);
+-- ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_cost_price_snapshot_check;
+-- ALTER TABLE public.order_items DROP COLUMN IF EXISTS cost_price_snapshot;
+-- COMMIT;
+--
+-- Do not GRANT SELECT ON TABLE order_items while cost_price_snapshot still exists.
+
+SELECT 'rollback_block5132 is documentation-only until an explicit apply is allowed'::text AS notice;
