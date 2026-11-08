@@ -1,6 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  adminDashboardAvgCheck,
+  productQtySharePct,
+  sortCityRevenuesDesc,
+} from '@/lib/adminDashboardView';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import { useTranslation } from '@/lib/i18n';
@@ -13,6 +18,14 @@ import {
   type ProductQty,
   type SellerTodayRow,
 } from '@/lib/todaySalesDashboard';
+import {
+  Bar,
+  BarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -40,6 +53,91 @@ function formatQty(qty: number, unit: string): string {
   return `${qty} ${label}`;
 }
 
+function IconRevenue() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4 19V5" strokeLinecap="round" />
+      <path d="M4 19h16" strokeLinecap="round" />
+      <path d="M8 15l4-5 3 3 5-7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconOrders() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="5" y="4" width="14" height="16" rx="2" />
+      <path d="M8 9h8M8 13h8M8 17h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M8.5 12.5l2.5 2.5 4.5-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconCities() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4 20V10l4-2 4 3 4-2 4 2v9" strokeLinejoin="round" />
+      <path d="M9 20v-5h6v5" />
+    </svg>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  hint,
+  tone,
+  icon,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone: 'blue' | 'green' | 'indigo' | 'amber';
+  icon: ReactNode;
+}) {
+  const tones = {
+    blue: 'bg-blue-50 text-blue-700',
+    green: 'bg-emerald-50 text-emerald-700',
+    indigo: 'bg-indigo-50 text-indigo-700',
+    amber: 'bg-amber-50 text-amber-700',
+  };
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-medium text-slate-500">{label}</p>
+        <span className={`inline-flex h-9 w-9 items-center justify-center rounded-xl ${tones[tone]}`}>{icon}</span>
+      </div>
+      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">{value}</p>
+      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-28 animate-pulse rounded-2xl bg-white shadow-sm border border-slate-200" />
+        ))}
+      </div>
+      <div className="h-64 animate-pulse rounded-2xl bg-white shadow-sm border border-slate-200" />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="h-56 animate-pulse rounded-2xl bg-white shadow-sm border border-slate-200" />
+        <div className="h-56 animate-pulse rounded-2xl bg-white shadow-sm border border-slate-200" />
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const { t } = useTranslation();
   const deletedSellerLabel = t('admin.deletedSeller');
@@ -50,6 +148,7 @@ export default function AdminPage() {
   const [productRows, setProductRows] = useState<ProductQty[]>([]);
   const [expandedSeller, setExpandedSeller] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -61,7 +160,9 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     async function load() {
+      setError(null);
       const today = getTodayLocalISO('Asia/Almaty');
       const range = getLocalDayRangeInTz(today, 'Asia/Almaty');
       const fromISO = range.from.toISOString();
@@ -75,6 +176,15 @@ export default function AdminPage() {
         supabase.from('orders').select(orderSelect).gte('debt_paid_at', fromISO).lt('debt_paid_at', toNextISO),
       ]);
 
+      const loadError = createdRes.error || fulfilledRes.error || debtPaidRes.error;
+      if (loadError) {
+        if (!cancelled) {
+          setError(loadError.message);
+          setLoading(false);
+        }
+        return;
+      }
+
       const seen = new Set<string>();
       const allRows: OrderRow[] = [];
       for (const row of [...(createdRes.data || []), ...(fulfilledRes.data || []), ...(debtPaidRes.data || [])] as OrderRow[]) {
@@ -87,12 +197,26 @@ export default function AdminPage() {
       const sellerIds = [...new Set(allRows.map((o) => o.seller_id).filter((id): id is string => !!id))];
       const nameMap = new Map<string, string>();
       if (sellerIds.length > 0) {
-        const { data: profiles } = await supabase.from('profiles').select('id, display_name').in('id', sellerIds);
+        const { data: profiles, error: profileError } = await supabase.from('profiles').select('id, display_name').in('id', sellerIds);
+        if (profileError) {
+          if (!cancelled) {
+            setError(profileError.message);
+            setLoading(false);
+          }
+          return;
+        }
         for (const p of profiles || []) {
           nameMap.set(p.id, (p.display_name || '').trim());
         }
       }
-      const { data: cities } = await supabase.from('cities').select('id, name');
+      const { data: cities, error: cityError } = await supabase.from('cities').select('id, name');
+      if (cityError) {
+        if (!cancelled) {
+          setError(cityError.message);
+          setLoading(false);
+        }
+        return;
+      }
       const cityNameMap = new Map((cities || []).map((c) => [c.id, c.name]));
 
       const dash = buildTodaySalesDashboard({
@@ -102,6 +226,7 @@ export default function AdminPage() {
         cityNames: cityNameMap,
         deletedSellerLabel,
       });
+      if (cancelled) return;
       setTodayRevenue(dash.todayRevenue);
       setTodayOrders(dash.todayOrders);
       setCityRevenues(dash.cityRevenues);
@@ -111,89 +236,116 @@ export default function AdminPage() {
     }
 
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshKey, deletedSellerLabel]);
 
+  const avgCheck = adminDashboardAvgCheck(todayRevenue, todayOrders);
   const sellersTotal = sellerRows.reduce((s, r) => s + r.revenue, 0);
+  const sortedCities = useMemo(() => sortCityRevenuesDesc(cityRevenues), [cityRevenues]);
+  const maxProductQty = productRows.reduce((m, p) => (p.qty > m ? p.qty : m), 0);
+  const chartHeight = Math.min(360, Math.max(220, sortedCities.length * 36));
 
   return (
     <Protected role="admin">
-      <div className="min-h-screen bg-white">
+      <div className="min-h-screen bg-slate-50">
         <NavAdmin />
-        <div className="p-4">
-          <h1 className="text-2xl font-bold mb-6 text-gray-900">{t('admin.dashboard')}</h1>
+        <div className="mx-auto max-w-6xl p-4 pb-10">
+          <div className="mb-6">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{t('admin.dashboard')}</h1>
+            <p className="mt-1 text-sm text-slate-500">{t('admin.todaySubtitle')}</p>
+          </div>
 
           {loading ? (
-            <p className="text-gray-900">{t('common.loading')}</p>
+            <DashboardSkeleton />
+          ) : error ? (
+            <div className="rounded-2xl border border-red-200 bg-white p-4 text-sm text-red-700 shadow-sm">
+              {t('admin.dashboardLoadError')}: {error}
+            </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="bg-blue-50 rounded-xl p-4">
-                  <p className="text-sm text-gray-600">{t('admin.todayRevenue')}</p>
-                  <p className="text-2xl font-bold text-gray-900">{formatMoney(todayRevenue)} ₸</p>
-                </div>
-                <div className="bg-green-50 rounded-xl p-4">
-                  <p className="text-sm text-gray-600">{t('admin.todayOrders')}</p>
-                  <p className="text-2xl font-bold text-gray-900">{todayOrders}</p>
-                </div>
+              <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <KpiCard
+                  label={t('admin.todayRevenue')}
+                  value={`${formatMoney(todayRevenue)} ₸`}
+                  tone="blue"
+                  icon={<IconRevenue />}
+                />
+                <KpiCard
+                  label={t('admin.todayOrders')}
+                  value={String(todayOrders)}
+                  tone="green"
+                  icon={<IconOrders />}
+                />
+                <KpiCard
+                  label={t('admin.avgCheck')}
+                  value={`${formatMoney(avgCheck)} ₸`}
+                  hint={t('admin.avgCheckHint')}
+                  tone="indigo"
+                  icon={<IconCheck />}
+                />
+                <KpiCard
+                  label={t('admin.citiesWithSales')}
+                  value={String(cityRevenues.length)}
+                  tone="amber"
+                  icon={<IconCities />}
+                />
               </div>
 
-              <div className="mb-6">
-                <h2 className="font-bold mb-2 text-gray-900">{t('admin.cityRevenue')}</h2>
-                <div className="border border-gray-200 rounded-lg overflow-x-auto">
-                  <table className="w-full min-w-[480px] text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="p-2 text-left text-gray-900">{t('admin.city')}</th>
-                        <th className="p-2 text-right text-gray-900">{t('admin.revenue')}</th>
-                        <th className="p-2 text-right text-gray-900">{t('admin.ordersCount')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cityRevenues.map((r) => (
-                        <tr key={r.city_name} className="border-t border-gray-200">
-                          <td className="p-2 text-gray-900">{r.city_name}</td>
-                          <td className="p-2 text-right text-gray-900">{formatMoney(r.revenue)} ₸</td>
-                          <td className="p-2 text-right text-gray-900">{r.order_count}</td>
-                        </tr>
-                      ))}
-                      {cityRevenues.length === 0 && (
-                        <tr>
-                          <td colSpan={3} className="p-2 text-gray-600">
-                            {t('admin.noDataToday')}
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div className="border border-gray-200 rounded-xl overflow-hidden">
-                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
-                    <h2 className="font-bold text-sm text-gray-900">{t('admin.todaySellerSales')}</h2>
+              <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h2 className="mb-3 text-sm font-semibold text-slate-900">{t('admin.cityRevenue')}</h2>
+                {sortedCities.length === 0 ? (
+                  <p className="py-10 text-center text-sm text-slate-500">{t('admin.noDataToday')}</p>
+                ) : (
+                  <div style={{ height: chartHeight }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={sortedCities} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+                        <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
+                        <YAxis
+                          type="category"
+                          dataKey="city_name"
+                          width={108}
+                          tick={{ fontSize: 11, fill: '#334155' }}
+                          tickFormatter={(value: string) => (value.length > 14 ? `${value.slice(0, 13)}…` : value)}
+                        />
+                        <Tooltip
+                          formatter={(value) => [`${formatMoney(Number(value ?? 0))} ₸`, t('admin.revenue')]}
+                          labelFormatter={(label) => String(label)}
+                        />
+                        <Bar dataKey="revenue" fill="#2563eb" radius={[0, 6, 6, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
                   </div>
-                  <div className="divide-y divide-gray-100">
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-100 px-4 py-3">
+                    <h2 className="text-sm font-semibold text-slate-900">{t('admin.todaySellerSales')}</h2>
+                  </div>
+                  <div className="divide-y divide-slate-100">
                     {sellerRows.length === 0 && (
-                      <p className="p-3 text-sm text-gray-600">{t('admin.noDataToday')}</p>
+                      <p className="p-4 text-sm text-slate-500">{t('admin.noDataToday')}</p>
                     )}
                     {sellerRows.map((s) => (
                       <div key={s.key}>
                         <button
                           type="button"
                           onClick={() => setExpandedSeller((cur) => (cur === s.key ? null : s.key))}
-                          className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-gray-50"
+                          className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left hover:bg-slate-50"
                         >
-                          <span className="text-sm font-medium text-gray-900 truncate">{s.name}</span>
-                          <span className="text-sm tabular-nums text-gray-900 shrink-0">{formatMoney(s.revenue)} ₸</span>
+                          <span className="truncate text-sm font-medium text-slate-900">{s.name}</span>
+                          <span className="shrink-0 text-sm tabular-nums text-slate-900">{formatMoney(s.revenue)} ₸</span>
                         </button>
                         {expandedSeller === s.key && (
-                          <div className="px-3 pb-2 pl-4 space-y-1">
+                          <div className="space-y-1 px-4 pb-3 pl-5">
                             {s.products.length === 0 ? (
-                              <p className="text-xs text-gray-500">{t('admin.noSoldItems')}</p>
+                              <p className="text-xs text-slate-500">{t('admin.noSoldItems')}</p>
                             ) : (
                               s.products.map((p) => (
-                                <div key={p.key} className="flex justify-between gap-2 text-xs text-gray-700">
+                                <div key={p.key} className="flex justify-between gap-2 text-xs text-slate-600">
                                   <span className="truncate">{p.name}</span>
                                   <span className="shrink-0 tabular-nums">{formatQty(p.qty, p.unit)}</span>
                                 </div>
@@ -204,26 +356,34 @@ export default function AdminPage() {
                       </div>
                     ))}
                   </div>
-                  <div className="px-3 py-2 border-t border-gray-200 bg-gray-50 flex justify-between text-sm font-semibold text-gray-900">
+                  <div className="flex justify-between border-t border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900">
                     <span>{t('admin.todaySellersTotal')}</span>
                     <span className="tabular-nums">{formatMoney(sellersTotal)} ₸</span>
                   </div>
                 </div>
 
-                <div className="border border-gray-200 rounded-xl overflow-hidden">
-                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
-                    <h2 className="font-bold text-sm text-gray-900">{t('admin.todaySoldProducts')}</h2>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-100 px-4 py-3">
+                    <h2 className="text-sm font-semibold text-slate-900">{t('admin.todaySoldProducts')}</h2>
                   </div>
-                  <div className="divide-y divide-gray-100">
+                  <div className="divide-y divide-slate-100">
                     {productRows.length === 0 && (
-                      <p className="p-3 text-sm text-gray-600">{t('admin.noDataToday')}</p>
+                      <p className="p-4 text-sm text-slate-500">{t('admin.noDataToday')}</p>
                     )}
-                    {productRows.map((p) => (
-                      <div key={p.key} className="flex items-center justify-between gap-2 px-3 py-2">
-                        <span className="text-sm text-gray-900 truncate">{p.name}</span>
-                        <span className="text-sm tabular-nums text-gray-900 shrink-0">{formatQty(p.qty, p.unit)}</span>
-                      </div>
-                    ))}
+                    {productRows.map((p) => {
+                      const pct = productQtySharePct(p.qty, maxProductQty);
+                      return (
+                        <div key={p.key} className="px-4 py-3">
+                          <div className="mb-1.5 flex items-center justify-between gap-2">
+                            <span className="truncate text-sm text-slate-900">{p.name}</span>
+                            <span className="shrink-0 text-sm tabular-nums text-slate-900">{formatQty(p.qty, p.unit)}</span>
+                          </div>
+                          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                            <div className="h-full rounded-full bg-blue-600" style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
