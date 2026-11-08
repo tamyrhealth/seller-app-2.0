@@ -13,7 +13,7 @@ import {
   spiderfyOffsets,
   spiderfyOffsetsForOrigin,
 } from '../lib/adminMap';
-import { findKzGeoCity, KZ_GEO_CITIES, normalizeMapAlias } from '../lib/kzCityCoords';
+import { classifyWarehouseNames, findKzGeoCity, KZ_GEO_CITIES, normalizeMapAlias } from '../lib/kzCityCoords';
 
 function fail(msg: string): never {
   console.error('FAIL', msg);
@@ -60,9 +60,57 @@ if (office.stocks.some((s) => s.productId === 'p2') || galia.stocks.some((s) => 
 if (!hidden || hidden.isActive || hidden.address !== null || hidden.stocks.length !== 0) {
   fail('inactive warehouse stays separate with empty address and stock');
 }
-if (findKzGeoCity('Алматинская') || findKzGeoCity('Новый-Алматы') || findKzGeoCity('Алматы Склад')) {
-  fail('must not group by partial name');
+if (findKzGeoCity('Алматинская') || findKzGeoCity('Новый-Алматы') || findKzGeoCity('Семиозерка-Тест')) {
+  fail('must not match a similar but wrong place');
 }
+if (findKzGeoCity('Алматы Склад')?.id !== 'almaty') fail('space after city name is a warehouse delimiter');
+if (findKzGeoCity('SKLAD')?.id !== 'almaty') fail('SKLAD exception → Almaty');
+if (findKzGeoCity('Өскемен-Арна')?.id !== 'oskemen') fail('compound kazakh city with hyphenated seller');
+if (findKzGeoCity('Усть-Каменогорск-Арна')?.id !== 'oskemen') fail('longest match for Ust-Kamenogorsk');
+if (findKzGeoCity('Астана-Ғафура')?.id !== 'astana') fail('Astana prefix');
+if (findKzGeoCity('Жезқазған-Айдана')?.id !== 'zhezkazgan') fail('future warehouse auto-detect');
+if (findKzGeoCity('Павлодар-Продавец')?.id !== 'pavlodar') fail('future Pavlodar');
+if (findKzGeoCity('Көкшетау-Продавец')?.id !== 'kokshetau') fail('future Kokshetau');
+if (findKzGeoCity('Жаңаөзен-Мереке')?.id !== 'zhanaozen') fail('Zhanaozen');
+if (findKzGeoCity('Құлсары-Гүлжанат')?.id !== 'kulsary') fail('Kulsary');
+if (findKzGeoCity('Шардара-Ләззат')?.id !== 'shardara') fail('Shardara');
+if (findKzGeoCity('Ақтау-Жанбота')?.id !== 'aktau') fail('Aktau kazakh spelling');
+if (findKzGeoCity('Қарағанды-Гүлжан')?.id !== 'karaganda') fail('Karaganda kazakh spelling');
+
+const aliasOwner = new Map<string, string>();
+for (const city of KZ_GEO_CITIES) {
+  for (const alias of city.aliases) {
+    const prev = aliasOwner.get(alias);
+    if (prev && prev !== city.id) fail(`duplicate alias ${alias} for ${prev} and ${city.id}`);
+    aliasOwner.set(alias, city.id);
+  }
+}
+
+const network = [
+  'Атырау-Айгүл',
+  'Атырау-Бибигүл',
+  'Атырау-Лара',
+  'Алматы-Офис',
+  'Алматы-Ғалия',
+  'Астана-Ғафура',
+  'Ақтау-Жанбота',
+  'Ақтөбе-Гүлдәурен',
+  'Қарағанды-Гүлжан',
+  'Қызылорда-Бақыт',
+  'Орал-Зульфия',
+  'Өскемен-Арна',
+  'Тараз-Айнұр',
+  'Шымкент-Ақнұр',
+  'Жаңаөзен-Мереке',
+  'Құлсары-Гүлжанат',
+  'Шардара-Ләззат',
+  'SKLAD',
+  'Семей',
+];
+const classified = classifyWarehouseNames(network);
+if (classified.unknown.length) fail(`network unknown: ${classified.unknown.join(', ')}`);
+if (classified.recognized.filter((r) => r.geoId === 'atyrau').length !== 3) fail('Atyrau cluster of 3');
+if (classified.recognized.filter((r) => r.geoId === 'almaty').length !== 3) fail('Almaty cluster includes SKLAD');
 if (normalizeMapAlias('Алматы - Офис') !== 'алматы-офис') fail('normalize hyphen spacing');
 
 const astana = grouped.markers.find((m) => m.geoId === 'astana');
@@ -141,4 +189,9 @@ const kzSet = new Set(keys.slice(keys.length / 2));
 for (const key of ruSet) if (!kzSet.has(key)) fail(`kz missing ${key}`);
 for (const key of kzSet) if (!ruSet.has(key)) fail(`ru missing ${key}`);
 
+const sampleUnknown = classifyWarehouseNames(['Склад Запад 12', 'Алматинская', 'Новый-Алматы']).unknown;
+if (sampleUnknown.length !== 3) fail(`expected 3 true unknowns, got ${sampleUnknown.join(', ')}`);
 console.log('admin-map checks ok');
+console.log(
+  `network warehouses: ${classified.recognized.length}/${network.length} recognized, unknown: ${classified.unknown.join(', ') || 'none'}`
+);
