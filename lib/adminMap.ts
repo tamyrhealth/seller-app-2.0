@@ -62,6 +62,7 @@ export type AdminMapReport = {
 export type MapSelection = {
   expandedGeoId: string | null;
   selectedCityId: string | null;
+  selectedTransferGroupId: string | null;
 };
 
 export type MapClickTarget =
@@ -282,18 +283,20 @@ export function buildAdminMap(input: {
 }
 
 export function reduceMapClick(state: MapSelection, target: MapClickTarget, marker?: MapGeoMarker | null): MapSelection {
-  if (target.type === 'background') return { expandedGeoId: null, selectedCityId: null };
+  if (target.type === 'background') {
+    return { expandedGeoId: null, selectedCityId: null, selectedTransferGroupId: null };
+  }
   if (target.type === 'seller') {
-    return { expandedGeoId: target.geoId, selectedCityId: target.cityId };
+    return { expandedGeoId: target.geoId, selectedCityId: target.cityId, selectedTransferGroupId: null };
   }
   const sellers = marker?.sellers || [];
   if (sellers.length <= 1) {
-    return { expandedGeoId: null, selectedCityId: sellers[0]?.cityId || null };
+    return { expandedGeoId: null, selectedCityId: sellers[0]?.cityId || null, selectedTransferGroupId: null };
   }
   if (state.expandedGeoId === target.geoId) {
-    return { expandedGeoId: null, selectedCityId: null };
+    return { expandedGeoId: null, selectedCityId: null, selectedTransferGroupId: null };
   }
-  return { expandedGeoId: target.geoId, selectedCityId: null };
+  return { expandedGeoId: target.geoId, selectedCityId: null, selectedTransferGroupId: null };
 }
 
 export function geoMarkerLabel(marker: MapGeoMarker, lang: 'ru' | 'kz'): string {

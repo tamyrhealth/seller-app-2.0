@@ -123,10 +123,17 @@ if (!atyrau) fail('Atyrau marker');
 if (!(almaty.x > atyrau.x)) fail('Almaty is east of Atyrau');
 if (!(astana.y < almaty.y)) fail('Astana is north of Almaty');
 
-const single = reduceMapClick({ expandedGeoId: null, selectedCityId: null }, { type: 'geo', geoId: 'astana' }, astana);
-if (single.expandedGeoId !== null || single.selectedCityId !== 'c-astana') fail('single seller opens panel directly');
+const idle = { expandedGeoId: null, selectedCityId: null, selectedTransferGroupId: 'route:atyrau->almaty' };
+const single = reduceMapClick(idle, { type: 'geo', geoId: 'astana' }, astana);
+if (single.expandedGeoId !== null || single.selectedCityId !== 'c-astana' || single.selectedTransferGroupId !== null) {
+  fail('single seller opens panel directly and clears transfer');
+}
 
-const open = reduceMapClick({ expandedGeoId: null, selectedCityId: null }, { type: 'geo', geoId: 'almaty' }, almaty);
+const open = reduceMapClick(
+  { expandedGeoId: null, selectedCityId: null, selectedTransferGroupId: null },
+  { type: 'geo', geoId: 'almaty' },
+  almaty
+);
 if (open.expandedGeoId !== 'almaty' || open.selectedCityId !== null) fail('cluster click spiderfies without picking a seller');
 const pick = reduceMapClick(open, { type: 'seller', geoId: 'almaty', cityId: 'c-galia' }, almaty);
 if (pick.selectedCityId !== 'c-galia' || pick.expandedGeoId !== 'almaty') fail('leaf click keeps spiderfy and opens panel');
@@ -134,8 +141,10 @@ const closeSame = reduceMapClick(open, { type: 'geo', geoId: 'almaty' }, almaty)
 if (closeSame.expandedGeoId !== null || closeSame.selectedCityId !== null) fail('second click on cluster closes spiderfy');
 const switchCity = reduceMapClick(open, { type: 'geo', geoId: 'atyrau' }, atyrau);
 if (switchCity.selectedCityId !== 'c-atyrau' || switchCity.expandedGeoId !== null) fail('other city closes previous spiderfy');
-const bg = reduceMapClick(pick, { type: 'background' });
-if (bg.expandedGeoId !== null || bg.selectedCityId !== null) fail('background clears selection');
+const bg = reduceMapClick({ ...pick, selectedTransferGroupId: 'local:almaty' }, { type: 'background' });
+if (bg.expandedGeoId !== null || bg.selectedCityId !== null || bg.selectedTransferGroupId !== null) {
+  fail('background clears warehouse and transfer selection');
+}
 
 if (spiderfyOffsets(1).length !== 0) fail('one seller has no spiderfy offsets');
 for (const n of [2, 3, 4, 6, 8]) {
@@ -180,6 +189,33 @@ if (!page.includes('lg:hidden') || !page.includes('hidden') || !page.includes('l
 if (!map.includes('spiderfyOffsetsForOrigin') || !map.includes('touch-none')) fail('spiderfy + touch zoom');
 if (!map.includes("addEventListener('wheel'")) fail('non-passive wheel');
 if (!page.includes('overscroll-contain') || !page.includes('safe-area-inset-bottom')) fail('mobile panel scroll/safe area');
+if (!page.includes('fetchInTransitMapTransfers') || !page.includes("eq('status', 'in_transit')") && !read('lib/fetchAdminMapTransfers.ts').includes(".eq('status', 'in_transit')")) {
+  fail('load only in_transit transfers');
+}
+const fetchSrc = read('lib/fetchAdminMapTransfers.ts');
+if (!fetchSrc.includes('.range(') || !fetchSrc.includes('MAP_TRANSFER_PAGE') || !fetchSrc.includes('truncated')) {
+  fail('transfer pagination required');
+}
+if (page.includes('receive_stock_transfer') || page.includes('cancel_stock_transfer') || page.includes('write_off')) {
+  fail('map must not mutate transfers');
+}
+if (!map.includes('animateMotion') || !map.includes('data-map-hit="truck"') || !map.includes('prefers-reduced-motion')) {
+  fail('decorative truck motion with reduced-motion');
+}
+if (!map.includes('map.layerAnimation') || !i18n.includes('не GPS-трекинг') || !i18n.includes('GPS-трекинг емес')) {
+  fail('animation is labelled as not GPS tracking');
+}
+if (page.includes('ETA') || page.includes('gps') || map.includes('percentAlong')) fail('must not invent GPS progress');
+if (!map.includes('data-map-hit="route"') || !map.includes('data-map-hit="local-transfer"')) fail('transfer hit targets');
+if (!map.includes('map.layerWarehouses') || !map.includes('map.layerTransfers')) fail('layer toggles');
+const localBlock = map.slice(map.indexOf('data-map-hit="local-transfer"'));
+if (localBlock.includes('TransferTruckIcon') || localBlock.includes('animateMotion')) fail('no trucks on intra-city markers');
+if (!page.includes('formatForecastQty(item.remaining') || page.includes('group.remaining')) {
+  fail('panel must show per-item qty, not mixed-unit group remaining');
+}
+if (!page.includes('mapTransfersForDisplay') || !page.includes('map.statusPartial')) {
+  fail('unreliable overlay hidden; statuses translated');
+}
 if (!nav.includes('href="/admin/map"')) fail('nav');
 if (managerNav.includes('/admin/map') || sellerNav.includes('/admin/map')) fail('staff nav leak');
 if (!i18n.includes("'map.nav': 'Карта'")) fail('i18n nav');

@@ -12,19 +12,55 @@ import {
   type MapSelection,
   type MapSeller,
 } from '@/lib/adminMap';
+import { MAP_TRUCK_DURATION_SEC, transferRouteArc, type MapTransferGroup } from '@/lib/adminMapTransfers';
 
 type Lang = 'ru' | 'kz';
+
+function routePathId(groupId: string) {
+  return `map-arc-${groupId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function truckPhaseSec(groupId: string) {
+  let h = 0;
+  for (let i = 0; i < groupId.length; i += 1) h = (h * 31 + groupId.charCodeAt(i)) >>> 0;
+  return h % MAP_TRUCK_DURATION_SEC;
+}
+
+function TransferTruckIcon({ fill }: { fill: string }) {
+  return (
+    <g transform="translate(-8 -5)">
+      <rect x="0.5" y="1.5" width="10.5" height="6.2" rx="1.2" fill={fill} stroke="#fff" strokeWidth={0.8} />
+      <rect x="11" y="3" width="4.2" height="4.7" rx="0.9" fill="#0f172a" stroke="#fff" strokeWidth={0.7} />
+      <circle cx="4.2" cy="8.4" r="1.5" fill="#1e293b" stroke="#fff" strokeWidth={0.5} />
+      <circle cx="12.6" cy="8.4" r="1.5" fill="#1e293b" stroke="#fff" strokeWidth={0.5} />
+    </g>
+  );
+}
 
 export default function AdminKazakhstanMap({
   markers,
   selection,
   onSelection,
+  onSelectTransfer,
+  routes,
+  localGroups,
+  showWarehouses,
+  showTransfers,
+  onToggleWarehouses,
+  onToggleTransfers,
   lang,
   t,
 }: {
   markers: MapGeoMarker[];
   selection: MapSelection;
   onSelection: (next: MapSelection) => void;
+  onSelectTransfer: (groupId: string) => void;
+  routes: MapTransferGroup[];
+  localGroups: MapTransferGroup[];
+  showWarehouses: boolean;
+  showTransfers: boolean;
+  onToggleWarehouses: (next: boolean) => void;
+  onToggleTransfers: (next: boolean) => void;
   lang: Lang;
   t: (key: string) => string;
 }) {
@@ -33,6 +69,8 @@ export default function AdminKazakhstanMap({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [spiderOn, setSpiderOn] = useState(false);
+  const [hoveredRouteId, setHoveredRouteId] = useState<string | null>(null);
+  const [animateTrucks, setAnimateTrucks] = useState(true);
   const drag = useRef<{
     pointerId: number;
     x: number;
@@ -50,6 +88,20 @@ export default function AdminKazakhstanMap({
   const byId = useMemo(() => new Map(markers.map((m) => [m.geoId, m])), [markers]);
   const expanded = selection.expandedGeoId ? byId.get(selection.expandedGeoId) || null : null;
   const offsets = expanded ? spiderfyOffsetsForOrigin(expanded.sellers.length, { x: expanded.x, y: expanded.y }) : [];
+  const localByGeo = useMemo(() => new Map(localGroups.map((g) => [g.from.geoId, g])), [localGroups]);
+
+  const routeArcs = useMemo(() => {
+    return routes
+      .map((group) => {
+        const from = group.from.geoId ? byId.get(group.from.geoId) : null;
+        const to = group.to.geoId ? byId.get(group.to.geoId) : null;
+        if (!from || !to) return null;
+        const arc = transferRouteArc({ x: from.x, y: from.y }, { x: to.x, y: to.y });
+        if (!arc) return null;
+        return { group, arc };
+      })
+      .filter((row): row is { group: MapTransferGroup; arc: NonNullable<ReturnType<typeof transferRouteArc>> } => !!row);
+  }, [routes, byId]);
 
   useEffect(() => {
     setSpiderOn(false);
@@ -57,6 +109,16 @@ export default function AdminKazakhstanMap({
     const id = requestAnimationFrame(() => setSpiderOn(true));
     return () => cancelAnimationFrame(id);
   }, [selection.expandedGeoId]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => {
+      if (mq.matches) setAnimateTrucks(false);
+    };
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
 
   function clampScale(s: number) {
     return Math.min(7, Math.max(0.85, s));
@@ -189,9 +251,9 @@ export default function AdminKazakhstanMap({
       return;
     }
     if (e.touches.length === 1 && !d.pinching) {
-      const t = e.touches[0];
-      const dx = t.clientX - d.x;
-      const dy = t.clientY - d.y;
+      const touch = e.touches[0];
+      const dx = touch.clientX - d.x;
+      const dy = touch.clientY - d.y;
       if (Math.hypot(dx, dy) > 6) d.moved = true;
       const svg = svgRef.current;
       if (!svg) return;
@@ -226,8 +288,38 @@ export default function AdminKazakhstanMap({
     onSelection(reduceMapClick(selection, { type: 'seller', geoId: marker.geoId, cityId: seller.cityId }, marker));
   }
 
+  function clickTransfer(groupId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (drag.current?.moved) return;
+    onSelectTransfer(groupId);
+  }
+
   return (
     <div className="relative h-full min-h-[22rem] overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+      <div className="absolute left-3 top-3 z-10 flex flex-col gap-1 rounded-xl border border-slate-200 bg-white/95 p-2 text-xs shadow-sm">
+        <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
+          <input
+            type="checkbox"
+            checked={showWarehouses}
+            onChange={(e) => onToggleWarehouses(e.target.checked)}
+          />
+          {t('map.layerWarehouses')}
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
+          <input type="checkbox" checked={showTransfers} onChange={(e) => onToggleTransfers(e.target.checked)} />
+          {t('map.layerTransfers')}
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
+          <input
+            type="checkbox"
+            checked={animateTrucks}
+            disabled={!showTransfers}
+            onChange={(e) => setAnimateTrucks(e.target.checked)}
+          />
+          {t('map.layerAnimation')}
+        </label>
+        <p className="max-w-[11rem] px-1 pt-0.5 leading-snug text-slate-500">{t('map.animationHint')}</p>
+      </div>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${MAP_VB_W} ${MAP_VB_H}`}
@@ -247,9 +339,82 @@ export default function AdminKazakhstanMap({
         <rect width={MAP_VB_W} height={MAP_VB_H} fill="#f8fafc" />
         <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
           <path d={outline} fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.4} strokeLinejoin="round" />
+          {showTransfers
+            ? routeArcs.map(({ group, arc }) => {
+                const selected = selection.selectedTransferGroupId === group.id;
+                const hovered = hoveredRouteId === group.id;
+                const stroke = selected ? '#1d4ed8' : hovered ? '#0f766e' : '#0369a1';
+                const pathId = routePathId(group.id);
+                const phase = truckPhaseSec(group.id);
+                return (
+                  <g
+                    key={group.id}
+                    data-map-hit="route"
+                    className="cursor-pointer"
+                    onClick={(e) => clickTransfer(group.id, e)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseEnter={() => setHoveredRouteId(group.id)}
+                    onMouseLeave={() => setHoveredRouteId((id) => (id === group.id ? null : id))}
+                  >
+                    <path d={arc.d} fill="none" stroke="transparent" strokeWidth={18} strokeLinecap="round" />
+                    <path
+                      id={pathId}
+                      d={arc.d}
+                      fill="none"
+                      stroke={stroke}
+                      strokeWidth={selected ? 3.2 : 2.2}
+                      strokeLinecap="round"
+                    />
+                    <g transform={`translate(${arc.ax} ${arc.ay}) rotate(${arc.angleDeg})`}>
+                      <polygon points="0,0 -11,-4.5 -11,4.5" fill={stroke} />
+                    </g>
+                    {group.documentCount > 1 ? (
+                      <g transform={`translate(${arc.bx} ${arc.by})`} className="pointer-events-none">
+                        <circle r={9} fill="#fff" stroke={stroke} strokeWidth={1.6} />
+                        <text y={3.2} textAnchor="middle" fill="#0f172a" fontSize={9} fontWeight={700}>
+                          {group.documentCount}
+                        </text>
+                      </g>
+                    ) : null}
+                    {animateTrucks ? (
+                      <g data-map-hit="truck">
+                        <animateMotion
+                          dur={`${MAP_TRUCK_DURATION_SEC}s`}
+                          repeatCount="indefinite"
+                          rotate="auto"
+                          begin={`-${phase}s`}
+                        >
+                          <mpath href={`#${pathId}`} />
+                        </animateMotion>
+                        <animate
+                          attributeName="opacity"
+                          values="0;1;1;0"
+                          keyTimes="0;0.07;0.93;1"
+                          dur={`${MAP_TRUCK_DURATION_SEC}s`}
+                          repeatCount="indefinite"
+                          begin={`-${phase}s`}
+                        />
+                        <circle r={11} fill="transparent" />
+                        <TransferTruckIcon fill={stroke} />
+                      </g>
+                    ) : (
+                      <g
+                        data-map-hit="truck"
+                        transform={`translate(${arc.mx} ${arc.my}) rotate(${arc.midAngleDeg})`}
+                      >
+                        <circle r={11} fill="transparent" />
+                        <TransferTruckIcon fill={stroke} />
+                      </g>
+                    )}
+                  </g>
+                );
+              })
+            : null}
           {markers.map((marker) => {
-            const isOpen = selection.expandedGeoId === marker.geoId && marker.sellers.length > 1;
+            const isOpen = showWarehouses && selection.expandedGeoId === marker.geoId && marker.sellers.length > 1;
             const selectedHere = marker.sellers.some((s) => s.cityId === selection.selectedCityId);
+            const local = showTransfers ? localByGeo.get(marker.geoId) : undefined;
+            const localSelected = local && selection.selectedTransferGroupId === local.id;
             return (
               <g key={marker.geoId}>
                 {isOpen
@@ -302,50 +467,81 @@ export default function AdminKazakhstanMap({
                       );
                     })
                   : null}
-                <g
-                  transform={`translate(${marker.x} ${marker.y})`}
-                  className="cursor-pointer"
-                  data-map-hit="geo"
-                  onClick={(e) => clickGeo(marker, e)}
-                  onPointerDown={(e) => e.stopPropagation()}
-                >
-                  <circle r={22} fill="transparent" />
-                  <circle
-                    r={isOpen ? 7 : 11}
-                    fill={selectedHere ? '#1d4ed8' : '#2563eb'}
-                    stroke="#fff"
-                    strokeWidth={2.4}
-                    opacity={isOpen ? 0.55 : 1}
-                  />
-                  {marker.sellers.length > 1 && !isOpen ? (
-                    <circle cx={10} cy={-10} r={8} fill="#0f172a" stroke="#fff" strokeWidth={1.5} />
-                  ) : null}
-                  {marker.sellers.length > 1 && !isOpen ? (
+                {showWarehouses ? (
+                  <g
+                    transform={`translate(${marker.x} ${marker.y})`}
+                    className="cursor-pointer"
+                    data-map-hit="geo"
+                    onClick={(e) => clickGeo(marker, e)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <circle r={22} fill="transparent" />
+                    <circle
+                      r={isOpen ? 7 : 11}
+                      fill={selectedHere ? '#1d4ed8' : '#2563eb'}
+                      stroke="#fff"
+                      strokeWidth={2.4}
+                      opacity={isOpen ? 0.55 : 1}
+                    />
+                    {marker.sellers.length > 1 && !isOpen ? (
+                      <circle cx={10} cy={-10} r={8} fill="#0f172a" stroke="#fff" strokeWidth={1.5} />
+                    ) : null}
+                    {marker.sellers.length > 1 && !isOpen ? (
+                      <text
+                        x={10}
+                        y={-7}
+                        textAnchor="middle"
+                        fill="#fff"
+                        fontSize={8}
+                        fontWeight={700}
+                        className="pointer-events-none"
+                      >
+                        {marker.sellers.length}
+                      </text>
+                    ) : null}
+                    {!isOpen ? (
+                      <text
+                        y={-16}
+                        textAnchor="middle"
+                        fill="#0f172a"
+                        fontSize={11}
+                        fontWeight={700}
+                        className="pointer-events-none"
+                      >
+                        {geoMarkerLabel(marker, lang)}
+                      </text>
+                    ) : null}
+                  </g>
+                ) : null}
+                {local ? (
+                  <g
+                    transform={`translate(${marker.x} ${marker.y})`}
+                    className="cursor-pointer"
+                    data-map-hit="local-transfer"
+                    onClick={(e) => clickTransfer(local.id, e)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <circle
+                      cx={-11}
+                      cy={11}
+                      r={8}
+                      fill={localSelected ? '#c2410c' : '#ea580c'}
+                      stroke="#fff"
+                      strokeWidth={1.5}
+                    />
                     <text
-                      x={10}
-                      y={-7}
+                      x={-11}
+                      y={14}
                       textAnchor="middle"
                       fill="#fff"
                       fontSize={8}
                       fontWeight={700}
                       className="pointer-events-none"
                     >
-                      {marker.sellers.length}
+                      {local.documentCount}
                     </text>
-                  ) : null}
-                  {!isOpen ? (
-                    <text
-                      y={-16}
-                      textAnchor="middle"
-                      fill="#0f172a"
-                      fontSize={11}
-                      fontWeight={700}
-                      className="pointer-events-none"
-                    >
-                      {geoMarkerLabel(marker, lang)}
-                    </text>
-                  ) : null}
-                </g>
+                  </g>
+                ) : null}
               </g>
             );
           })}
