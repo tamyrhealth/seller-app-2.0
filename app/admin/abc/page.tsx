@@ -5,6 +5,7 @@ import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import { buildAdminAbc, type AbcCatalogFilter, type AbcMode, type AbcProductRow } from '@/lib/adminAbc';
 import {
+  abcCogsHintKey,
   formatAbcKpi,
   formatAbcPct,
   paretoPoints,
@@ -407,7 +408,7 @@ export default function AdminAbcPage() {
                 <KpiCard
                   label={t('abc.gross')}
                   value={kpiOk && report.estimatedGrossProfit != null ? `${formatMoney(report.estimatedGrossProfit)} ₸` : '—'}
-                  hint={t('abc.estimateMark')}
+                  hint={t(abcCogsHintKey(report))}
                   tone="green"
                 />
                 <KpiCard label={t('abc.classA')} value={classOk ? String(report.countA) : '—'} tone="indigo" />
@@ -438,7 +439,7 @@ export default function AdminAbcPage() {
                 </button>
               </div>
 
-              <Section title={t('abc.pareto')} hint={t('abc.estimateMark')}>
+              <Section title={t('abc.pareto')} hint={t(abcCogsHintKey(report))}>
                 {chartRows.length === 0 ? (
                   <p className="text-sm text-slate-500">
                     {report.rows.length === 0 ? t('abc.empty') : t('abc.paretoUnavailable')}

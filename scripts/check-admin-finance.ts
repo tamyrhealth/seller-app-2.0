@@ -42,6 +42,9 @@ import {
   financeCogsHintKey,
   financeGrossKpi,
   financeNetKpi,
+  expensesCompleteForPeriod,
+  financeOpexKpi,
+  periodExpenseJournalEmpty,
   isSessionOnlyExpenseCompleteness,
   monthRangeYmd,
   ordersForCityView,
@@ -420,6 +423,31 @@ if (parsed.length !== 1 || parsed[0].id !== 'e1') fail('parse expenses list rpc 
 
 if (empty.cogsIsHistorical !== false) fail('empty period is not historical');
 if (empty.cogsQuality !== 'estimated') fail('empty quality is estimated, not historical');
+if (empty.operatingExpenses !== 0) fail('empty journal technical opex stays 0');
+if (emptyIncomplete.preliminaryNetProfit !== 0) fail('net formula still uses journal 0 when incomplete');
+if (financeOpexKpi(emptyIncomplete, true).kind !== 'unavailable' || financeOpexKpi(emptyIncomplete, true).amount != null) {
+  fail('empty journal opex is not entered');
+}
+if (financeOpexKpi(empty, true).kind !== 'fact' || financeOpexKpi(empty, true).amount !== 0) {
+  fail('confirmed empty journal may show 0');
+}
+const partialExp = report({
+  orders: [paid],
+  expenses: [{ expense_date: fromYmd, category: 'ads', amount: 100 }],
+  expensesInputComplete: false,
+});
+if (partialExp.operatingExpenses !== 100) fail('partial journal still sums opex');
+if (financeOpexKpi(partialExp, false).kind !== 'estimate' || financeOpexKpi(partialExp, false).amount !== 100) {
+  fail('partial journal opex remains estimate');
+}
+if (partialExp.estimatedNetProfit !== null) fail('partial journal net stays untrusted');
+if (!periodExpenseJournalEmpty([], fromYmd, toYmd)) fail('no rows is empty journal');
+if (periodExpenseJournalEmpty([{ expense_date: fromYmd, category: 'ads', amount: 1 }], fromYmd, toYmd)) {
+  fail('live row is not empty journal');
+}
+if (!expensesCompleteForPeriod('2026-11-01:2026-11-08', '2026-11-01:2026-11-08')) fail('complete only for confirmed period');
+if (expensesCompleteForPeriod('2026-11-01:2026-11-08', '2026-11-08:2026-11-08')) fail('period change must drop complete on same render');
+if (expensesCompleteForPeriod(null, '2026-11-01:2026-11-08')) fail('unconfirmed is not complete');
 if (giftR.warnings.includes('cogs_is_current_catalog_not_historical') === false) fail('catalog warning when no snapshots');
 if (giftR.cogsIsHistorical) fail('catalog-only gift report is not historical');
 
@@ -853,7 +881,13 @@ if (!page.includes('p_operation_id') || !page.includes('newClientOperationId')) 
 if (!page.includes('disabled={saving}')) fail('disable while saving');
 if (!page.includes('runExclusive')) fail('exclusive submit');
 if (!page.includes('window.confirm')) fail('soft delete confirm');
-if (!page.includes('expensesCompleteHint') || !page.includes('setExpensesComplete')) fail('session completeness ui');
+if (!page.includes('expensesCompleteHint') || !page.includes('expensesCompleteForPeriod')) fail('session completeness ui');
+if (!page.includes('setConfirmedExpensePeriod(periodKey)')) fail('complete bound to current period');
+if (!page.includes('setConfirmedExpensePeriod(null)')) fail('uncheck clears confirmation');
+if (page.includes('setExpensesComplete(false)') && page.includes('[periodKey]')) fail('must not reset completeness in an effect after render');
+if (!page.includes('finance.expensesNotEntered') || !page.includes('financeOpexKpi')) fail('empty journal opex copy');
+if (!page.includes('finance.expensesEmptyConfirm')) fail('empty journal explicit confirm');
+if (!page.includes('journalEmpty && !window.confirm')) fail('empty-journal confirm only');
 if (page.includes('writeUserUi') || page.includes('localStorage')) fail('must not persist month-close');
 if (!page.includes('financeCogsHintKey') || !page.includes('finance.cargoHint')) fail('reliability copy');
 if (!page.includes('FINANCE_ITEM_SNAPSHOTS_RPC') || !page.includes('snapshotsUnavailable')) fail('snapshot rpc load');
@@ -902,6 +936,9 @@ if (FINANCE_EXPENSE_EVENTS_RPC !== 'admin_finance_expense_events') fail('events 
 if (!FINANCE_ORDER_SELECT.includes('order_items(id, product_id')) fail('finance select includes item id');
 if (!i18n.includes("'finance.cogsHintHistorical':") || !i18n.includes("'finance.cogsHintMixed':")) fail('i18n snapshot hints');
 if (!i18n.includes("'finance.cogsMixed':") || !i18n.includes("'finance.snapshotsUnavailable':")) fail('i18n snapshot banners');
+if (!i18n.includes("'finance.expensesNotEntered': 'Расходы не внесены'")) fail('i18n empty opex ru');
+if (!i18n.includes("'finance.expensesNotEntered': 'Шығындар енгізілмеген'")) fail('i18n empty opex kz');
+if (!i18n.includes("'finance.expensesEmptyConfirm':")) fail('i18n empty journal confirm');
 
 void (async () => {
   let rpcCalls = 0;

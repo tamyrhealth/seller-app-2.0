@@ -205,6 +205,25 @@ export function financeCogsHintKey(report: AdminFinanceReport): string {
   return 'finance.cogsHint';
 }
 
+export function periodExpenseJournalEmpty(
+  expenses: FinanceExpenseRow[] | null | undefined,
+  fromYmd: string,
+  toYmd: string
+): boolean {
+  return uniqueLiveExpenses(expenses, fromYmd, toYmd).length === 0;
+}
+
+export function financeOpexKpi(report: AdminFinanceReport, journalEmpty: boolean): FinanceKpi {
+  if (journalEmpty && !report.expensesComplete) return { kind: 'unavailable', amount: null };
+  if (journalEmpty && report.expensesComplete) return { kind: 'fact', amount: 0 };
+  if (!report.expensesComplete) return { kind: 'estimate', amount: report.operatingExpenses };
+  return { kind: 'estimate', amount: report.operatingExpenses };
+}
+
+export function expensesCompleteForPeriod(confirmedPeriodKey: string | null, periodKey: string): boolean {
+  return Boolean(confirmedPeriodKey) && confirmedPeriodKey === periodKey;
+}
+
 export function isSessionOnlyExpenseCompleteness(storedOnServer: boolean): boolean {
   return storedOnServer !== true;
 }

@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { assignAbcClasses, buildAdminAbc, visibleAbcRows, type AbcProductRow } from '../lib/adminAbc';
-import { formatAbcPct, paretoPoints, resolveAbcRange, sortAbcRows } from '../lib/adminAbcView';
+import { abcCogsHintKey, formatAbcPct, paretoPoints, resolveAbcRange, sortAbcRows } from '../lib/adminAbcView';
 import { buildAdminFinance, type FinanceOrder } from '../lib/adminFinance';
+import { resolveFinanceRange } from '../lib/adminFinanceView';
 import { ordersForCityView } from '../lib/adminFinanceView';
 import { lastMonthRangeYmd, yearRangeYmd } from '../lib/adminCustomersView';
 
@@ -389,7 +390,15 @@ const thisMonth = resolveAbcRange({
   customTo: '',
   todayYmd: '2026-11-08',
 });
-if (!thisMonth || thisMonth.fromYmd !== '2026-11-01' || thisMonth.toYmd !== '2026-11-30') fail('this month');
+if (!thisMonth || thisMonth.fromYmd !== '2026-11-01' || thisMonth.toYmd !== '2026-11-08') fail('abc thisMonth to today');
+const financeThisMonth = resolveFinanceRange({ mode: 'thisMonth', customFrom: '', customTo: '', todayYmd: '2026-11-08' });
+if (!financeThisMonth || financeThisMonth.fromYmd !== thisMonth.fromYmd || financeThisMonth.toYmd !== thisMonth.toYmd) {
+  fail('abc thisMonth must match finance');
+}
+if (abcCogsHintKey({ cogsQuality: 'historical' }) !== 'abc.cogsHistorical') fail('abc historical label');
+if (abcCogsHintKey({ cogsQuality: 'estimated' }) !== 'abc.cogsEstimated') fail('abc estimated label');
+if (abcCogsHintKey({ cogsQuality: 'mixed' }) !== 'abc.cogsMixed') fail('abc mixed label');
+if (abcCogsHintKey({ cogsQuality: 'incomplete' }) !== 'abc.cogsIncomplete') fail('abc incomplete label');
 const last = lastMonthRangeYmd('2026-11-08');
 if (last.fromYmd !== '2026-10-01' || last.toYmd !== '2026-10-31') fail('last month');
 if (yearRangeYmd(2026).fromYmd !== '2026-01-01') fail('year');
@@ -458,15 +467,21 @@ if (!page.includes('let cancelled = false')) fail('load cancel');
 if (!page.includes('runExclusive')) fail('coalesce fetches');
 if (page.includes('console.log')) fail('page must not log');
 if (page.includes('/api/')) fail('no public abc API');
-if (!page.includes('abc.estimateMark')) fail('estimate copy');
+if (!page.includes('abcCogsHintKey')) fail('cogs quality labels');
 if (!page.includes('abc.truncated')) fail('truncated copy');
 if (!nav.includes('href="/admin/abc"') || !nav.includes("t('abc.nav')")) fail('nav abc');
 if (managerNav.includes('/admin/abc')) fail('manager must not see abc');
 if (sellerNav.includes('/admin/abc')) fail('seller must not see abc');
 if (page.includes(', t]')) fail('language switch must not refetch orders');
 if (!page.includes('paretoPoints(visibleAbcTableRows(report))')) fail('pareto uses ranking not table sort');
-if (!i18n.includes("'abc.nav': 'ABC'") || !i18n.includes("'abc.estimateMark': 'Оценка по текущей себестоимости'")) fail('i18n ru');
-if (!i18n.includes("'abc.estimateMark': 'Ағымдағы өзіндік құн бойынша бағалау'")) fail('i18n kz');
+if (!i18n.includes("'abc.nav': 'ABC'") || !i18n.includes("'abc.cogsHistorical': 'Историческая себестоимость'")) fail('i18n ru');
+if (!i18n.includes("'abc.cogsEstimated': 'Оценочная себестоимость'")) fail('i18n estimated ru');
+if (!i18n.includes("'abc.cogsMixed': 'Смешанная себестоимость'")) fail('i18n mixed ru');
+if (!i18n.includes("'abc.cogsIncomplete': 'Недостаточно данных'")) fail('i18n incomplete ru');
+if (!i18n.includes("'abc.cogsHistorical': 'Тарихи өзіндік құн'")) fail('i18n kz historical');
+if (!i18n.includes("'abc.cogsEstimated': 'Бағаланған өзіндік құн'")) fail('i18n kz estimated');
+if (!i18n.includes("'abc.cogsMixed': 'Аралас өзіндік құн'")) fail('i18n kz mixed');
+if (!i18n.includes("'abc.cogsIncomplete': 'Дерек жеткіліксіз'")) fail('i18n kz incomplete');
 const keys = [...i18n.matchAll(/'(abc\.[^']+)':/g)].map((m) => m[1]);
 const ruSet = new Set(keys.slice(0, keys.length / 2));
 const kzSet = new Set(keys.slice(keys.length / 2));

@@ -1,5 +1,6 @@
 import type { AbcProductRow, AdminAbcReport } from '@/lib/adminAbc';
 import { formatCustomerKpi, resolveCustomerRange, type CustomerPeriodMode } from '@/lib/adminCustomersView';
+import { resolvePeriod } from '@/lib/adminStats';
 
 export type AbcPeriodMode = CustomerPeriodMode;
 export type AbcSortKey = 'share' | 'revenue' | 'profit' | 'qty' | 'name';
@@ -14,7 +15,18 @@ export function resolveAbcRange(opts: {
   customTo: string;
   todayYmd: string;
 }) {
+  if (opts.mode === 'thisMonth') {
+    const spec = resolvePeriod('thisMonth', undefined, undefined, opts.todayYmd);
+    return spec ? { fromYmd: spec.fromYmd, toYmd: spec.toYmd, range: spec.range } : null;
+  }
   return resolveCustomerRange(opts);
+}
+
+export function abcCogsHintKey(report: Pick<AdminAbcReport, 'cogsQuality'>): string {
+  if (report.cogsQuality === 'historical') return 'abc.cogsHistorical';
+  if (report.cogsQuality === 'mixed') return 'abc.cogsMixed';
+  if (report.cogsQuality === 'incomplete') return 'abc.cogsIncomplete';
+  return 'abc.cogsEstimated';
 }
 
 export function formatAbcPct(value: number | null, complete: boolean): string {

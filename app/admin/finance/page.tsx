@@ -41,6 +41,9 @@ import {
   financeGrossKpi,
   financeMarginKpi,
   financeNetKpi,
+  expensesCompleteForPeriod,
+  financeOpexKpi,
+  periodExpenseJournalEmpty,
   ordersForCityView,
   resolveFinanceRange,
   sortFinanceSellerRows,
@@ -176,7 +179,7 @@ export default function AdminFinancePage() {
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [expensesComplete, setExpensesComplete] = useState(false);
+  const [confirmedExpensePeriod, setConfirmedExpensePeriod] = useState<string | null>(null);
   const [form, setForm] = useState<ExpenseForm>(() => emptyForm(today));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -240,10 +243,7 @@ export default function AdminFinancePage() {
   }, [refreshKey]);
 
   const periodKey = spec ? `${spec.fromYmd}:${spec.toYmd}` : 'invalid';
-
-  useEffect(() => {
-    setExpensesComplete(false);
-  }, [periodKey]);
+  const expensesComplete = expensesCompleteForPeriod(confirmedExpensePeriod, periodKey);
 
   useEffect(() => {
     if (!editingId) operationIdRef.current = newClientOperationId();
@@ -500,8 +500,10 @@ export default function AdminFinancePage() {
     setFormError(null);
   }
 
+  const journalEmpty = spec ? periodExpenseJournalEmpty(expenses, spec.fromYmd, spec.toYmd) : true;
   const cogsKpi = report ? financeCogsKpi(report) : null;
   const grossKpi = report ? financeGrossKpi(report) : null;
+  const opexKpi = report ? financeOpexKpi(report, journalEmpty) : null;
   const netKpi = report ? financeNetKpi(report) : null;
   const marginKpi = report ? financeMarginKpi(report) : null;
 
@@ -577,7 +579,7 @@ export default function AdminFinancePage() {
                 ? t('admin.dateRangeInvalid')
                 : `${t('finance.loadError')}: ${financeErrorCopy(error, t)}`}
             </div>
-          ) : report && cogsKpi && grossKpi && netKpi && marginKpi ? (
+          ) : report && cogsKpi && grossKpi && opexKpi && netKpi && marginKpi ? (
             <div className="space-y-4">
               {truncated ? (
                 <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -639,9 +641,9 @@ export default function AdminFinancePage() {
                 />
                 <KpiCard
                   label={t('finance.opex')}
-                  value={`${formatMoney(report.operatingExpenses)} ₸`}
-                  hint={t('finance.estimate')}
-                  tone="indigo"
+                  value={opexKpi.kind === 'unavailable' ? t('finance.expensesNotEntered') : kpiText(opexKpi)}
+                  hint={kpiHint(opexKpi)}
+                  tone={opexKpi.kind === 'unavailable' ? 'slate' : 'indigo'}
                 />
                 <KpiCard
                   label={t('finance.net')}
@@ -662,7 +664,14 @@ export default function AdminFinancePage() {
                   type="checkbox"
                   className="mt-1"
                   checked={expensesComplete}
-                  onChange={(e) => setExpensesComplete(e.target.checked)}
+                  onChange={(e) => {
+                    if (!e.target.checked) {
+                      setConfirmedExpensePeriod(null);
+                      return;
+                    }
+                    if (journalEmpty && !window.confirm(t('finance.expensesEmptyConfirm'))) return;
+                    setConfirmedExpensePeriod(periodKey);
+                  }}
                 />
                 <span>
                   <span className="font-medium">{t('finance.expensesCompleteLabel')}</span>
