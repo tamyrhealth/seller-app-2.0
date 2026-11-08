@@ -12,6 +12,7 @@ import {
 import { matchTransferCities } from '../lib/assistant/transferCityMatch';
 import { resolveProductQuery } from '../lib/assistant/productAliases';
 import { qtyValidationError } from '../lib/assistant/qty';
+import { foldTransferProductQuery } from '../lib/assistant/transferProductFold';
 import { isAssistantRole } from '../lib/roles';
 import { looksLikeInvoice } from '../lib/assistant/paymentParse';
 import { parseCancelIntent } from '../lib/assistant/cancelIntent';
@@ -287,6 +288,15 @@ if (bothPowders.chosen) fail('bare Порошок ОРГ with two sizes must not
 if (bothPowders.candidates.length < 2) fail('bare Порошок ОРГ must offer existing sizes');
 const powderInflect = resolveProductQuery('порошка', [powder250, powder500]);
 if (powderInflect.chosen) fail('inflected порошка with two SKUs must not pick at random');
+if (foldTransferProductQuery('2 порошка') !== '2 порошок') fail('порошка must fold to порошок for transfers');
+if (foldTransferProductQuery('3 чая') !== '3 чай') fail('чая must fold to чай for transfers');
+if (foldTransferProductQuery('5 порошков') !== '5 порошок') fail('порошков must fold to порошок');
+if (foldTransferProductQuery('5 чаёв') !== '5 чай') fail('чаёв must fold to чай');
+if (foldTransferProductQuery('ұнтағы') !== 'ұнтақ') fail('ұнтағы must fold to ұнтақ');
+if (foldTransferProductQuery('шайдан') !== 'шай') fail('шайдан must fold to шай');
+if (foldTransferProductQuery('пластыря') !== 'пластырь') fail('пластыря must fold to пластырь');
+if (foldTransferProductQuery('шампуня') !== 'шампунь') fail('шампуня must fold to шампунь');
+if (foldTransferProductQuery('мазь') !== 'мазь') fail('unlisted words must stay unchanged');
 
 const sameWh = applyTransferEdit(
   liveWarehouses,
@@ -324,6 +334,69 @@ const rawPick = applyTransferEdit(
 if (rawPick.can_confirm) fail('ambiguous powder must not confirm after warehouse pick');
 if (!rawPick.errors.some((e) => e.code === 'product_ambiguous')) fail('warehouse pick keeps product_ambiguous');
 if ((rawPick.resolved.items[0]?.candidates || []).length < 2) fail('ambiguous powder must keep candidates');
+
+const prodMsg = 'SKLAD → Астана-Гафура\n2 порошка\n3 чая';
+const prodIntent = parseTransferIntent(prodMsg);
+if (!prodIntent) fail('production transfer sample must parse as transfer');
+if (prodIntent.fromQuery.toLowerCase() !== 'sklad' || prodIntent.toQuery.toLowerCase() !== 'астана-гафура') {
+  fail(`production sample warehouses ${prodIntent.fromQuery} → ${prodIntent.toQuery}`);
+}
+if (prodIntent.items.length !== 2 || prodIntent.items[0].qty !== 2 || prodIntent.items[1].qty !== 3) {
+  fail(`production sample qty ${JSON.stringify(prodIntent.items)}`);
+}
+if (!/порош/i.test(prodIntent.items[0].raw_name) || !/ча/i.test(prodIntent.items[1].raw_name)) {
+  fail(`production sample names ${JSON.stringify(prodIntent.items)}`);
+}
+
+const teaOnly = { id: 'tea', name: 'Чай', unit: 'pcs', price_retail: 1, is_active: true };
+const inflectForms: Array<{ raw: string; qty: number; expect: string; catalog: typeof powder250[] }> = [
+  { raw: 'порошок', qty: 1, expect: 'p250', catalog: [powder250] },
+  { raw: 'порошка', qty: 2, expect: 'p250', catalog: [powder250] },
+  { raw: 'порошков', qty: 5, expect: 'p250', catalog: [powder250] },
+  { raw: 'чай', qty: 1, expect: 'tea', catalog: [teaOnly] },
+  { raw: 'чая', qty: 3, expect: 'tea', catalog: [teaOnly] },
+  { raw: 'чаёв', qty: 5, expect: 'tea', catalog: [teaOnly] },
+  { raw: 'ұнтақ', qty: 2, expect: 'p250', catalog: [powder250] },
+  { raw: 'ұнтағы', qty: 2, expect: 'p250', catalog: [powder250] },
+  { raw: 'шай', qty: 3, expect: 'tea', catalog: [teaOnly] },
+  { raw: 'шайдан', qty: 3, expect: 'tea', catalog: [teaOnly] },
+];
+for (const row of inflectForms) {
+  const got = applyTransferEdit(
+    liveWarehouses,
+    row.catalog,
+    new Map([
+      ['p250', 20],
+      ['tea', 20],
+    ]),
+    'sklad',
+    'gafura',
+    [{ product_id: '', qty: row.qty, raw_name: row.raw }],
+    { role: 'admin', can_create_transfers: false }
+  );
+  if (got.resolved.items[0]?.product_id !== row.expect) {
+    fail(`transfer «${row.qty} ${row.raw}» → ${got.resolved.items[0]?.product_id || got.errors[0]?.message}, expected ${row.expect}`);
+  }
+}
+
+const prodAmbiguous = applyTransferEdit(
+  liveWarehouses,
+  [powder250, powder500, teaOnly],
+  new Map([
+    ['p250', 20],
+    ['p500', 20],
+    ['tea', 20],
+  ]),
+  'sklad',
+  'gafura',
+  prodIntent.items.map((item) => ({ product_id: '', qty: item.qty, raw_name: item.raw_name })),
+  { role: 'admin', can_create_transfers: false }
+);
+if (prodAmbiguous.can_confirm) fail('production sample with two powder SKUs must not auto-pick a size');
+if (!prodAmbiguous.errors.some((e) => e.code === 'product_ambiguous')) fail('2 порошка with two SKUs must ask to pick');
+const teaLine = prodAmbiguous.resolved.items.find((i) => /ча/i.test(i.raw_name || '') || /ча/i.test(i.product_name || ''));
+if (teaLine?.product_id !== 'tea' || teaLine.qty !== 3) fail(`3 чая must resolve uniquely, got ${JSON.stringify(teaLine)}`);
+if ((prodAmbiguous.resolved.items[0]?.candidates || []).length < 2) fail('ambiguous powder inflected form must list both sizes');
 
 const mergedDup = mergeTransferEditItems([
   { product_id: 'p250', qty: 2, raw_name: 'порошок' },
@@ -546,6 +619,11 @@ if (!read('lib/assistant/resolveTransfer.ts').includes('найдено неск�
 if (!read('lib/assistant/transferCityMatch.ts').includes('matchTransferWarehouses')) {
   fail('warehouse matcher must live in transferCityMatch');
 }
+if (!read('lib/assistant/resolveTransfer.ts').includes('foldTransferProductQuery')) {
+  fail('transfer product matching must fold inflected names');
+}
+if (read('lib/assistant/productAliases.ts').includes('порошка')) fail('do not put case inflections into global product aliases');
+if (read('lib/assistant/nameFold.ts').includes('порошка')) fail('do not change global nameFold for product case');
 if (!update.includes('row.product_id || row.raw_name')) fail('update must keep unresolved item names after warehouse pick');
 if (!card.includes('insufficient_stock')) fail('card must hide fake shortage until warehouse chosen');
 if (!card.includes('!sent && sourceReady && item.stock != null')) {

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { resolveProductQuery, type CatalogProduct } from '@/lib/assistant/productAliases';
+import { foldTransferProductQuery } from '@/lib/assistant/transferProductFold';
 import { qtyValidationError } from '@/lib/assistant/qty';
 import {
   geoCityForTransferQuery,
@@ -204,7 +205,7 @@ function resolveItem(
   stockByProduct: Map<string, number>,
   fromCityId: string | null
 ): TransferItemResolved {
-  const match = resolveProductQuery(raw_name, catalog);
+  const match = resolveProductQuery(foldTransferProductQuery(raw_name), catalog);
   const chosen = match.chosen;
   const unit = chosen?.unit || null;
   const qtyErr = qtyValidationError(qty, unit);
