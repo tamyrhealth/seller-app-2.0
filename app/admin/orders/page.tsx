@@ -13,7 +13,7 @@ import {
   parseDateStr,
 } from '@/lib/accounting';
 import { getTodayLocalISO } from '@/lib/datetime';
-import type { Order, PreorderStatus } from '@/lib/types';
+import { ORDER_ITEMS_PUBLIC_SELECT, type Order, type PreorderStatus } from '@/lib/types';
 import type { City } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import { useTranslation } from '@/lib/i18n';
@@ -371,7 +371,7 @@ export default function AdminOrdersPage() {
     setDetailLoading(true);
     supabase
       .from('orders')
-      .select('*, order_items(*)')
+      .select(`*, order_items(${ORDER_ITEMS_PUBLIC_SELECT})`)
       .eq('id', selectedId)
       .maybeSingle()
       .then(({ data, error }) => {

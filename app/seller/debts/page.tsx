@@ -11,7 +11,7 @@ import { useTranslation } from '@/lib/i18n';
 import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber } from '@/lib/orderNumber';
 import { runExclusive } from '@/lib/exclusiveAsync';
-import type { Order } from '@/lib/types';
+import { ORDER_ITEMS_PUBLIC_SELECT, type Order } from '@/lib/types';
 import type { City } from '@/lib/types';
 
 function formatMoney(n: number) {
@@ -110,7 +110,7 @@ export default function SellerDebtsPage() {
     }
     supabase
       .from('orders')
-      .select('*, order_items(*)')
+      .select(`*, order_items(${ORDER_ITEMS_PUBLIC_SELECT})`)
       .eq('id', selectedId)
       .single()
       .then(({ data }) => setOrderDetail(data as Order | null));
