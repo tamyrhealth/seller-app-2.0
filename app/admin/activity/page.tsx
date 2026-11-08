@@ -23,7 +23,9 @@ import {
   activityPageRange,
   activitySumDisplay,
   fetchAdminOrderActivity,
+  fetchCurrentOrderSums,
   isActivityDateRangeInvalid,
+  unrecordedOrderIds,
   type ActivityLogRow,
 } from '@/lib/adminActivity';
 
@@ -54,6 +56,8 @@ export default function AdminActivityPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentSums, setCurrentSums] = useState<Map<string, number>>(() => new Map());
+  const [sumLookupError, setSumLookupError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Pick<Profile, 'id' | 'display_name' | 'role'>[]>([]);
 
   const dateRangeInvalid = isActivityDateRangeInvalid(fromYmd, toYmd);
@@ -81,6 +85,8 @@ export default function AdminActivityPage() {
       if (dateRangeInvalid) {
         setRows([]);
         setTotal(0);
+        setCurrentSums(new Map());
+        setSumLookupError(null);
         setLoading(false);
         return;
       }
@@ -96,14 +102,29 @@ export default function AdminActivityPage() {
       if (result.error === 'date_range_invalid') {
         setRows([]);
         setTotal(0);
-        setError(t('admin.dateRangeInvalid'));
+        setError(null);
+        setCurrentSums(new Map());
+        setSumLookupError(null);
       } else if (result.error) {
         setRows([]);
         setTotal(0);
         setError(result.error);
+        setCurrentSums(new Map());
+        setSumLookupError(null);
       } else {
         setRows(result.rows);
         setTotal(result.total);
+        setError(null);
+        try {
+          const lookup = await fetchCurrentOrderSums(supabase, unrecordedOrderIds(result.rows));
+          if (cancelled) return;
+          setCurrentSums(lookup.sums);
+          setSumLookupError(lookup.error);
+        } catch (lookupErr) {
+          if (cancelled) return;
+          setCurrentSums(new Map());
+          setSumLookupError(lookupErr instanceof Error ? lookupErr.message : 'sum lookup failed');
+        }
       }
       setLoading(false);
     }
@@ -111,7 +132,7 @@ export default function AdminActivityPage() {
     return () => {
       cancelled = true;
     };
-  }, [fromYmd, toYmd, userId, action, numberSearch, page, dateRangeInvalid, t]);
+  }, [fromYmd, toYmd, userId, action, numberSearch, page, dateRangeInvalid]);
 
   const actionOptions = useMemo(
     () =>
@@ -190,6 +211,11 @@ export default function AdminActivityPage() {
               {t('admin.activityError')}: {error}
             </p>
           ) : null}
+          {sumLookupError ? (
+            <p className="text-sm text-red-700 mb-3">
+              {t('admin.activityError')}: {sumLookupError}
+            </p>
+          ) : null}
           {loading ? <p className="text-sm text-gray-600 mb-3">{t('admin.activityLoading')}</p> : null}
           {!loading && !error && !dateRangeInvalid && rows.length === 0 ? (
             <p className="text-sm text-gray-600 mb-3">{t('admin.activityEmpty')}</p>
@@ -228,7 +254,11 @@ export default function AdminActivityPage() {
                     ) : null}
                   </p>
                   {sumDisplay.kind === 'unrecorded' ? (
-                    <p className="text-sm text-gray-900">{t('admin.sumNotRecorded')}</p>
+                    <p className="text-sm text-gray-900">
+                      {row.entity_id && currentSums.has(row.entity_id)
+                        ? `${t('admin.currentOrderSum')}: ${formatMoney(currentSums.get(row.entity_id) as number)} ₸`
+                        : t('admin.historicalSumMissing')}
+                    </p>
                   ) : sumDisplay.kind === 'value' ? (
                     <p className="text-sm text-gray-900">
                       {t('admin.historySum')}: {formatMoney(sumDisplay.value)} ₸

@@ -10,8 +10,10 @@ import {
   activitySumDisplay,
   activityTotalSum,
   applyActivityLogFilters,
+  fetchCurrentOrderSums,
   isActivityDateRangeInvalid,
   readOrderIdFromSearch,
+  unrecordedOrderIds,
 } from '../lib/adminActivity';
 import { orderHistoryActionLabel } from '../lib/orderActionHistory';
 
@@ -54,6 +56,24 @@ if (activitySumDisplay('preorder_fulfill', { total_sum: 5000, items: [] }).kind 
 }
 if (readOrderIdFromSearch('?id=abc-uuid') !== 'abc-uuid') fail('parse order id query');
 if (readOrderIdFromSearch('') !== null) fail('empty search has no id');
+const oldRow = {
+  id: '1',
+  created_at: '',
+  action: 'order_create',
+  user_id: null,
+  user_name: null,
+  user_role: null,
+  entity_type: 'order',
+  entity_id: 'ord-a',
+  details: { total_sum: 0, order_number: 'N000035' },
+};
+const newRow = {
+  ...oldRow,
+  id: '2',
+  entity_id: 'ord-b',
+  details: { total_sum: 5000, items: [{ name: 'A', qty: 1 }] },
+};
+if (unrecordedOrderIds([oldRow, oldRow, newRow]).join() !== 'ord-a') fail('unrecorded ids must be unique and skip new logs');
 if (activityCancelReturnedStock({ already_canceled: true, returned_stock: false }) !== null) {
   fail('repeat cancel must not claim stock');
 }
@@ -126,9 +146,15 @@ if (!helper.includes("{ count: 'exact' }")) fail('pagination needs total count')
 if (actionLog.includes(".from('action_logs').insert")) fail('client must not insert action_logs');
 if (page.includes(".insert") && page.includes('action_logs')) fail('page must not write logs');
 if (page.includes(".from('action_logs')")) fail('page must query through helper, not ad-hoc');
-if (!page.includes('activitySumDisplay') || !i18n.includes('admin.sumNotRecorded')) {
-  fail('journal must explain unrecorded old totals');
+if (!page.includes('activitySumDisplay') || !i18n.includes('admin.currentOrderSum')) {
+  fail('journal must label live totals as current, not historical');
 }
+if (!page.includes('fetchCurrentOrderSums') || !page.includes('unrecordedOrderIds')) {
+  fail('old totals must be batched from orders');
+}
+if (!helper.includes(".in('id'")) fail('current sums must use one in() query');
+if (page.includes('dateRangeInvalid, t]')) fail('activity load must not depend on unstable t');
+if (!i18n.includes('admin.historicalSumMissing')) fail('missing current order sum copy');
 
 const ordersPage = read('app/admin/orders/page.tsx');
 if (!ordersPage.includes('readOrderIdFromSearch')) fail('admin orders must open /admin/orders?id=');
@@ -138,6 +164,13 @@ if (!ordersPage.includes('closeOrderDetail')) fail('closing the card must not de
 if (!ordersPage.includes('activitySumDisplay')) fail('order history must reuse unrecorded-sum heuristic');
 if (ordersPage.includes('.single()')) fail('single() hides a missing order as a blank card');
 if (!ordersPage.includes('popstate')) fail('browser back should sync selected order id');
+if (ordersPage.includes('[selectedId, refreshKey, t]')) fail('detail effect must not depend on unstable t');
+if (!ordersPage.includes('[selectedId, refreshKey]')) fail('detail effect deps must stay selectedId and refreshKey');
+if (!ordersPage.includes('prev === next')) fail('URL sync must ignore unchanged id');
+if (!ordersPage.includes('prev.length === 0 ? prev')) fail('cleared card must not setState a new empty history array');
+if (!ordersPage.includes("detailError === 'admin.orderNotFound'")) {
+  fail('order-not-found must translate at render for RU/KZ');
+}
 
 const migrations = read('supabase/migrations/20261107200000_action_logs_protect_and_order_history.sql');
 if (/CREATE OR REPLACE FUNCTION public\.confirm_order/i.test(migrations)) fail('must not rewrite confirm_order');
@@ -145,4 +178,35 @@ if (/CREATE OR REPLACE FUNCTION public\.apply_order_cancel_report/i.test(page + 
   fail('must not touch cancel RPC');
 }
 
-console.log('admin-activity checks ok');
+void (async () => {
+  let inCalls = 0;
+  const client = {
+    from(table: string) {
+      if (table !== 'orders') fail(`unexpected table ${table}`);
+      return {
+        select() {
+          return {
+            async in(_column: string, values: string[]) {
+              inCalls += 1;
+              return {
+                data: values.map((id) => ({ id, total_sum: 5000 })),
+                error: null,
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+  const batched = await fetchCurrentOrderSums(client, ['a', 'a', 'b']);
+  if (inCalls !== 1) fail('current sums must use a single in() query');
+  if (batched.sums.get('a') !== 5000 || batched.sums.get('b') !== 5000 || batched.error) {
+    fail('batch current sums');
+  }
+  const skipped = await fetchCurrentOrderSums(client, []);
+  if (inCalls !== 1 || skipped.sums.size !== 0) fail('empty id list must not query orders');
+  console.log('admin-activity checks ok');
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -129,11 +129,50 @@ export function applyActivityLogFilters<Q extends FilterQuery>(
   return q as Q;
 }
 
+export function unrecordedOrderIds(rows: ActivityLogRow[]): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (activitySumDisplay(row.action, row.details).kind !== 'unrecorded') continue;
+    const id = String(row.entity_id || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
 export type ActivitySupabase = {
   from: (table: string) => {
     select: (columns: string, opts?: { count?: 'exact' }) => unknown;
   };
 };
+
+export async function fetchCurrentOrderSums(
+  client: ActivitySupabase,
+  ids: string[]
+): Promise<{ sums: Map<string, number>; error: string | null }> {
+  const unique = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (unique.length === 0) return { sums: new Map(), error: null };
+  const { data, error } = (await (
+    client.from('orders').select('id, total_sum') as {
+      in: (
+        column: string,
+        values: string[]
+      ) => Promise<{ data: { id: string; total_sum: unknown }[] | null; error: { message: string } | null }>;
+    }
+  ).in('id', unique)) as {
+    data: { id: string; total_sum: unknown }[] | null;
+    error: { message: string } | null;
+  };
+  if (error) return { sums: new Map(), error: error.message };
+  const sums = new Map<string, number>();
+  for (const row of data || []) {
+    const n = Number(row.total_sum);
+    if (row.id && Number.isFinite(n)) sums.set(String(row.id), n);
+  }
+  return { sums, error: null };
+}
 
 export async function fetchAdminOrderActivity(
   client: ActivitySupabase,

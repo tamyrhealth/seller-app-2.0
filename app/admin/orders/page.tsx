@@ -179,7 +179,8 @@ export default function AdminOrdersPage() {
 
   useEffect(() => {
     const syncFromUrl = () => {
-      setSelectedId(readOrderIdFromSearch(window.location.search));
+      const next = readOrderIdFromSearch(window.location.search);
+      setSelectedId((prev) => (prev === next ? prev : next));
     };
     syncFromUrl();
     window.addEventListener('popstate', syncFromUrl);
@@ -356,11 +357,11 @@ export default function AdminOrdersPage() {
 
   useEffect(() => {
     if (!selectedId) {
-      setOrderDetail(null);
-      setOrderHistory([]);
-      setHistoryError(null);
-      setDetailError(null);
-      setDetailLoading(false);
+      setOrderDetail((prev) => (prev == null ? prev : null));
+      setOrderHistory((prev) => (prev.length === 0 ? prev : []));
+      setHistoryError((prev) => (prev == null ? prev : null));
+      setDetailError((prev) => (prev == null ? prev : null));
+      setDetailLoading((prev) => (prev === false ? prev : false));
       return;
     }
     let cancelled = false;
@@ -377,12 +378,12 @@ export default function AdminOrdersPage() {
         setDetailLoading(false);
         if (error) {
           setOrderDetail(null);
-          setDetailError(error.message || t('admin.orderNotFound'));
+          setDetailError(error.message || 'admin.orderNotFound');
           return;
         }
         if (!data) {
           setOrderDetail(null);
-          setDetailError(t('admin.orderNotFound'));
+          setDetailError('admin.orderNotFound');
           return;
         }
         setDetailError(null);
@@ -398,7 +399,7 @@ export default function AdminOrdersPage() {
         if (cancelled) return;
         if (error) {
           setOrderHistory([]);
-          setHistoryError(error.message || t('admin.historyError'));
+          setHistoryError(error.message || '');
           return;
         }
         setHistoryError(null);
@@ -407,7 +408,7 @@ export default function AdminOrdersPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, refreshKey, t]);
+  }, [selectedId, refreshKey]);
 
   async function handleCancel(orderId: string, reason?: string | null) {
     await runExclusive(`admin-cancel:${orderId}`, async () => {
@@ -797,7 +798,9 @@ export default function AdminOrdersPage() {
                 className="bg-white rounded-xl p-6 max-w-md w-full"
                 onClick={(e) => e.stopPropagation()}
               >
-                <p className="text-gray-900 mb-4">{detailError}</p>
+                <p className="text-gray-900 mb-4">
+                  {detailError === 'admin.orderNotFound' ? t('admin.orderNotFound') : detailError}
+                </p>
                 <button
                   type="button"
                   onClick={closeOrderDetail}
@@ -864,7 +867,10 @@ export default function AdminOrdersPage() {
                 <div className="mt-3 pt-3 border-t border-gray-200">
                   <p className="text-sm font-semibold text-gray-900 mb-1">{t('admin.history')}</p>
                   {historyError ? (
-                    <p className="text-xs text-red-700">{t('admin.historyError')}: {historyError}</p>
+                    <p className="text-xs text-red-700">
+                      {t('admin.historyError')}
+                      {historyError ? `: ${historyError}` : ''}
+                    </p>
                   ) : orderHistory.length === 0 ? (
                     <p className="text-xs text-gray-600">{t('admin.historyEmpty')}</p>
                   ) : (
@@ -888,7 +894,11 @@ export default function AdminOrdersPage() {
                               {t('admin.historyWho')}: {orderHistoryActorLabel(h.user_name, h.user_role)}
                             </p>
                             {sumDisplay.kind === 'unrecorded' ? (
-                              <p>{t('admin.sumNotRecorded')}</p>
+                              <p>
+                                {Number.isFinite(Number(orderDetail.total_sum))
+                                  ? `${t('admin.currentOrderSum')}: ${formatMoney(Number(orderDetail.total_sum))} ₸`
+                                  : t('admin.historicalSumMissing')}
+                              </p>
                             ) : sumDisplay.kind === 'value' ? (
                               <p>
                                 {t('admin.historySum')}: {formatMoney(sumDisplay.value)} ₸
