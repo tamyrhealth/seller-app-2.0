@@ -17,6 +17,7 @@ export type StatsPeriodPreset =
   | 'custom';
 
 export type StatsOrderItem = {
+  id?: string | null;
   product_id?: string | null;
   qty?: number | null;
   price?: number | null;

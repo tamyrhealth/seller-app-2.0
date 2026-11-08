@@ -7,7 +7,7 @@ const PAGE = ORDER_STATS_PAGE;
 const MAX = ORDER_STATS_MAX;
 
 export const ORDER_STATS_SELECT =
-  'id, seller_id, total_sum, city_id, created_at, status, payment_type, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at, debt_due_at, order_items(product_id, qty, price, line_sum, is_gift, product_name_snapshot, product:products(name, unit))';
+  'id, seller_id, total_sum, city_id, created_at, status, payment_type, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at, debt_due_at, order_items(id, product_id, qty, price, line_sum, is_gift, product_name_snapshot, product:products(name, unit))';
 
 export type FetchOrdersResult = {
   orders: StatsOrder[];

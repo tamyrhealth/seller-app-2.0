@@ -1,6 +1,7 @@
 import {
   buildAdminFinance,
   mergeFinanceOrders,
+  type FinanceCogsQuality,
   type FinanceOrder,
   type FinanceProductRow,
 } from '@/lib/adminFinance';
@@ -35,6 +36,8 @@ export type AdminAbcReport = {
   estimatedGrossProfit: number | null;
   cogsComplete: boolean;
   missingCostProductCount: number;
+  cogsQuality: FinanceCogsQuality;
+  cogsIsHistorical: boolean;
   profitAbcAvailable: boolean;
   profitAbcBlockedReason: 'truncated' | 'missing_cost' | 'non_positive_total' | null;
   countA: number;
@@ -108,6 +111,8 @@ export function buildAdminAbc(params: {
   catalogFilter: AbcCatalogFilter;
   mode: AbcMode;
   complete: boolean;
+  itemSnapshots?: Map<string, number | null> | null;
+  itemSnapshotsUnavailable?: boolean;
 }): AdminAbcReport {
   const cityOrders = ordersForCityView(mergeFinanceOrders([params.orders]), params.cityId);
   const finance = buildAdminFinance({
@@ -119,6 +124,8 @@ export function buildAdminAbc(params: {
     expenses: [],
     cityNames: new Map(),
     expensesInputComplete: true,
+    itemSnapshots: params.itemSnapshots,
+    itemSnapshotsUnavailable: params.itemSnapshotsUnavailable,
   });
 
   const missingCostWithQty = finance.productRows.some((row) => qtyMoved(row) > 0 && row.costMissing);
@@ -190,6 +197,8 @@ export function buildAdminAbc(params: {
     estimatedGrossProfit: finance.estimatedGrossProfit,
     cogsComplete: finance.cogsComplete,
     missingCostProductCount: finance.missingCostProductCount,
+    cogsQuality: finance.cogsQuality,
+    cogsIsHistorical: finance.cogsIsHistorical,
     profitAbcAvailable,
     profitAbcBlockedReason: profitBlocked,
     countA: params.complete ? rows.filter((row) => row.abcClass === 'A').length : 0,

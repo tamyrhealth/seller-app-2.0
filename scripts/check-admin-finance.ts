@@ -28,8 +28,18 @@ import {
   type FinanceOrder,
 } from '../lib/adminFinance';
 import {
+  chunkIds,
+  collectFinanceOrderItemIds,
+  FINANCE_SNAPSHOT_BATCH,
+  loadOrderItemCostSnapshots,
+  parseOrderItemCostSnapshots,
+  resolveLineUnitCost,
+} from '../lib/adminFinanceSnapshots';
+import {
   expensesForCityView,
   FINANCE_PERIOD_PRESETS,
+  financeCogsKpi,
+  financeCogsHintKey,
   financeGrossKpi,
   financeNetKpi,
   isSessionOnlyExpenseCompleteness,
@@ -408,8 +418,126 @@ const parsed = parseFinanceExpensesList({
 });
 if (parsed.length !== 1 || parsed[0].id !== 'e1') fail('parse expenses list rpc shape');
 
-if (empty.cogsIsHistorical !== false) fail('current cost must never be labeled historical');
-if (giftR.warnings.includes('cogs_is_current_catalog_not_historical') === false) fail('historical warning always on');
+if (empty.cogsIsHistorical !== false) fail('empty period is not historical');
+if (empty.cogsQuality !== 'estimated') fail('empty quality is estimated, not historical');
+if (giftR.warnings.includes('cogs_is_current_catalog_not_historical') === false) fail('catalog warning when no snapshots');
+if (giftR.cogsIsHistorical) fail('catalog-only gift report is not historical');
+
+const snapPaid: FinanceOrder = {
+  ...paid,
+  order_items: [{ id: 'oi-1', product_id: 'p1', qty: 2, price: 5000, line_sum: 10000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } }],
+};
+const histMap = new Map<string, number | null>([['oi-1', 400]]);
+const hist = report({
+  orders: [snapPaid],
+  costs: [{ id: 'p1', cost_price: 9999 }],
+  itemSnapshots: histMap,
+});
+if (hist.cogsKnown !== 800) fail('snapshot beats later catalog cost');
+if (hist.cogsQuality !== 'historical' || !hist.cogsIsHistorical) fail('all snapshots are historical');
+if (hist.warnings.includes('cogs_is_current_catalog_not_historical')) fail('historical report must not claim catalog estimate');
+if (hist.cityRows[0].cogsKnown !== 800 || hist.sellerRows[0].cogsKnown !== 800) fail('city/seller use snapshot');
+if (hist.productRows[0].cogsKnown !== 800 || hist.productRows[0].unitCost !== 400) fail('product uses snapshot unit');
+if (financeCogsKpi(hist).kind !== 'fact') fail('historical cogs kpi is fact');
+if (financeCogsHintKey(hist) !== 'finance.cogsHintHistorical') fail('historical hint key');
+
+const zeroSnap = report({
+  orders: [snapPaid],
+  costs: [{ id: 'p1', cost_price: 1000 }],
+  itemSnapshots: new Map([['oi-1', 0]]),
+});
+if (zeroSnap.cogsKnown !== 0) fail('snapshot 0 is known zero, not missing');
+if (!zeroSnap.cogsComplete || zeroSnap.cogsQuality !== 'historical') fail('zero snapshot is historical');
+if (zeroSnap.estimatedGrossProfit !== 10000) fail('zero cost gross is revenue');
+
+const nullSnap = report({
+  orders: [snapPaid],
+  costs: [{ id: 'p1', cost_price: 1000 }],
+  itemSnapshots: new Map([['oi-1', null]]),
+});
+if (nullSnap.cogsKnown !== 2000) fail('null snapshot falls back to catalog');
+if (nullSnap.cogsQuality !== 'estimated' || nullSnap.cogsIsHistorical) fail('null snapshot is estimated');
+
+const unknownSnap = report({
+  orders: [snapPaid],
+  costs: [{ id: 'p1', cost_price: null }],
+  itemSnapshots: new Map([['oi-1', null]]),
+});
+if (unknownSnap.cogsComplete || unknownSnap.cogsQuality !== 'incomplete') fail('both missing is incomplete');
+if (unknownSnap.estimatedGrossProfit !== null) fail('incomplete gross hidden');
+
+const mixedSnap: FinanceOrder = {
+  ...paid,
+  id: 'o-mix',
+  order_items: [
+    { id: 'oi-h', product_id: 'p1', qty: 1, price: 5000, line_sum: 5000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } },
+    { id: 'oi-e', product_id: 'p1', qty: 1, price: 5000, line_sum: 5000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } },
+  ],
+};
+const mixedR = report({
+  orders: [{ ...mixedSnap, total_sum: 10000 }],
+  costs: [{ id: 'p1', cost_price: 1000 }],
+  itemSnapshots: new Map([['oi-h', 400], ['oi-e', null]]),
+});
+if (mixedR.cogsKnown !== 1400) fail('mixed 400+1000');
+if (mixedR.cogsQuality !== 'mixed' || mixedR.cogsIsHistorical) fail('mixed is not historical');
+if (!mixedR.warnings.includes('cogs_mixed_historical_and_estimated')) fail('mixed warning');
+if (financeCogsKpi(mixedR).kind !== 'estimate') fail('mixed cogs remains estimate');
+if (financeCogsHintKey(mixedR) !== 'finance.cogsHintMixed') fail('mixed hint key');
+if (financeGrossKpi(unknownSnap).kind !== 'unavailable') fail('incomplete gross unavailable');
+
+const giftSnap = report({
+  orders: [{
+    ...withGift,
+    order_items: [
+      { id: 'g1', product_id: 'p1', qty: 2, price: 5000, line_sum: 10000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } },
+      { id: 'g2', product_id: 'p1', qty: 1, price: 0, line_sum: 0, is_gift: true, product: { name: 'Молоко', unit: 'pcs' } },
+    ],
+  }],
+  itemSnapshots: new Map([['g1', 400], ['g2', 400]]),
+});
+if (giftSnap.cogsKnown !== 1200 || giftSnap.giftCogsKnown !== 400) fail('gift uses snapshot');
+if (giftSnap.cogsQuality !== 'historical') fail('gift snapshots historical');
+
+if (report({ orders: [{ ...snapPaid, status: 'canceled' }], itemSnapshots: histMap }).cogsKnown !== 0) {
+  fail('canceled snapshot must not enter cogs');
+}
+if (report({ orders: [unpaidDebt], itemSnapshots: histMap }).cogsKnown !== 0) fail('unpaid debt snapshot ignored');
+const repaidSnap: FinanceOrder = {
+  ...repaid,
+  order_items: [{ id: 'oi-d', product_id: 'p1', qty: 1, price: 8000, line_sum: 8000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } }],
+};
+if (report({ orders: [repaidSnap], itemSnapshots: new Map([['oi-d', 50]]) }).cogsKnown !== 50) fail('repaid debt uses snapshot');
+const preSnap: FinanceOrder = {
+  ...fulfilledPre,
+  order_items: [{ id: 'oi-p', product_id: 'p1', qty: 1, price: 3000, line_sum: 3000, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } }],
+};
+if (report({ orders: [preSnap], itemSnapshots: new Map([['oi-p', 70]]) }).cogsKnown !== 70) fail('fulfilled preorder uses snapshot');
+if (report({ orders: [pendingPre], itemSnapshots: new Map([['oi-p', 70]]) }).cogsKnown !== 0) fail('pending preorder snapshot ignored');
+
+const frac: FinanceOrder = {
+  ...paid,
+  order_items: [{ id: 'oi-f', product_id: 'p1', qty: 1.5, price: 5000, line_sum: 7500, is_gift: false, product: { name: 'Молоко', unit: 'pcs' } }],
+};
+if (report({ orders: [frac], itemSnapshots: new Map([['oi-f', 100]]) }).cogsKnown !== 150) fail('fractional qty * snapshot');
+
+const rpcFail = report({
+  orders: [snapPaid],
+  costs: [{ id: 'p1', cost_price: 1000 }],
+  itemSnapshotsUnavailable: true,
+});
+if (rpcFail.cogsKnown !== 2000) fail('rpc fail falls back to catalog');
+if (rpcFail.cogsIsHistorical) fail('rpc fail must not be historical');
+if (!rpcFail.warnings.includes('cogs_historical_unavailable')) fail('rpc fail warning');
+if (financeCogsHintKey(rpcFail) !== 'finance.snapshotsUnavailable') fail('rpc fail hint');
+
+if (resolveLineUnitCost({ snapshot: 0, catalog: 9 }).source !== 'historical') fail('0 snapshot is historical');
+if (resolveLineUnitCost({ snapshot: null, catalog: 9 }).source !== 'estimated') fail('null snapshot estimated');
+if (resolveLineUnitCost({ snapshot: null, catalog: null }).source !== 'unknown') fail('both missing unknown');
+if (parseOrderItemCostSnapshots([{ id: 'x', cost_price_snapshot: '12.50' }]).get('x') !== 12.5) fail('parse numeric string');
+if (collectFinanceOrderItemIds([snapPaid]).join() !== 'oi-1') fail('collect item ids');
+if (chunkIds(Array.from({ length: 20001 }, (_, i) => String(i))).length !== 2) fail('rpc batches at 20000');
+if (FINANCE_SNAPSHOT_BATCH !== 20000) fail('rpc batch cap');
 
 const nov = monthRangeYmd(2026, 11);
 if (nov.fromYmd !== '2026-11-01' || nov.toYmd !== '2026-11-30') fail('month bounds');
@@ -727,7 +855,9 @@ if (!page.includes('runExclusive')) fail('exclusive submit');
 if (!page.includes('window.confirm')) fail('soft delete confirm');
 if (!page.includes('expensesCompleteHint') || !page.includes('setExpensesComplete')) fail('session completeness ui');
 if (page.includes('writeUserUi') || page.includes('localStorage')) fail('must not persist month-close');
-if (!page.includes('finance.cogsHint') || !page.includes('finance.cargoHint')) fail('reliability copy');
+if (!page.includes('financeCogsHintKey') || !page.includes('finance.cargoHint')) fail('reliability copy');
+if (!page.includes('FINANCE_ITEM_SNAPSHOTS_RPC') || !page.includes('snapshotsUnavailable')) fail('snapshot rpc load');
+if (!page.includes('finance.cogsMixed')) fail('mixed quality banner');
 if (!page.includes('finance.companyTitle') || !page.includes('finance.byCity')) fail('report sections');
 if (!page.includes('finance.bySeller') || !page.includes('sortFinanceSellerRows')) fail('seller gross section');
 if (!page.includes('finance.noSeller') || !page.includes('finance.bySellerHint')) fail('seller copy');
@@ -769,5 +899,32 @@ if (FINANCE_EXPENSE_CREATE_RPC !== 'admin_finance_expense_create') fail('create 
 if (FINANCE_EXPENSE_UPDATE_RPC !== 'admin_finance_expense_update') fail('update rpc name');
 if (FINANCE_EXPENSE_DELETE_RPC !== 'admin_finance_expense_delete') fail('delete rpc name');
 if (FINANCE_EXPENSE_EVENTS_RPC !== 'admin_finance_expense_events') fail('events rpc name');
+if (!FINANCE_ORDER_SELECT.includes('order_items(id, product_id')) fail('finance select includes item id');
+if (!i18n.includes("'finance.cogsHintHistorical':") || !i18n.includes("'finance.cogsHintMixed':")) fail('i18n snapshot hints');
+if (!i18n.includes("'finance.cogsMixed':") || !i18n.includes("'finance.snapshotsUnavailable':")) fail('i18n snapshot banners');
 
-console.log('admin-finance checks ok');
+void (async () => {
+  let rpcCalls = 0;
+  const loaded = await loadOrderItemCostSnapshots(['a', 'b'], async (ids) => {
+    rpcCalls += 1;
+    return { data: ids.map((id) => ({ id, cost_price_snapshot: 1 })), error: null };
+  });
+  if (rpcCalls !== 1 || loaded.map.get('a') !== 1 || loaded.error) fail('rpc load one batch');
+  const failedLoad = await loadOrderItemCostSnapshots(['a'], async () => ({
+    data: [{ id: 'a', cost_price_snapshot: 5 }],
+    error: { message: 'down' },
+  }));
+  if (!failedLoad.error || failedLoad.map.size !== 0) fail('rpc error discards partial map');
+  const many = Array.from({ length: 20001 }, (_, i) => `id-${i}`);
+  let batchCalls = 0;
+  const batched = await loadOrderItemCostSnapshots(many, async (chunk) => {
+    batchCalls += 1;
+    if (chunk.length > 20000) fail('rpc batch overflow');
+    return { data: chunk.map((id) => ({ id, cost_price_snapshot: 0 })), error: null };
+  });
+  if (batchCalls !== 2 || batched.batches !== 2 || batched.map.size !== 20001) fail('rpc splits at 20000');
+  if (batched.map.get('id-0') !== 0) fail('batched snapshot 0 kept');
+  console.log('admin-finance checks ok');
+})().catch((err) => {
+  fail(err instanceof Error ? err.message : String(err));
+});

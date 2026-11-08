@@ -1,7 +1,7 @@
 /**
- * Управленческие финансовые расчёты (этап 5.5.2).
+ * Управленческие финансовые расчёты.
  * Выручка — только через lib/accounting.ts.
- * Себестоимость — только текущий каталог из admin_product_costs(); это оценка, не история.
+ * Себестоимость строки: cost_price_snapshot, иначе оценка admin_product_costs().
  * Расходы — журнал admin_finance_expenses_list; закупка партии сюда не подмешивается.
  */
 
@@ -12,6 +12,7 @@ import {
 } from '@/lib/accounting';
 import { allocateOrderLines, type StatsOrder } from '@/lib/adminStats';
 import type { ProductCostRow } from '@/lib/productCost';
+import { resolveLineUnitCost, snapshotForItem } from '@/lib/adminFinanceSnapshots';
 
 export const FINANCE_COSTS_RPC = 'admin_product_costs' as const;
 export const FINANCE_EXPENSES_LIST_RPC = 'admin_finance_expenses_list' as const;
@@ -37,15 +38,19 @@ export const FINANCE_EXPENSE_CATEGORIES = [
 export type FinanceExpenseCategory = (typeof FINANCE_EXPENSE_CATEGORIES)[number];
 
 export const FINANCE_ORDER_SELECT =
-  'id, seller_id, total_sum, city_id, created_at, status, payment_type, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at, debt_payment_method, order_items(product_id, qty, price, line_sum, is_gift, product_name_snapshot, product:products(name, unit))';
+  'id, seller_id, total_sum, city_id, created_at, status, payment_type, is_preorder, preorder_status, fulfilled_at, is_debt, debt_status, debt_paid_at, debt_payment_method, order_items(id, product_id, qty, price, line_sum, is_gift, product_name_snapshot, product:products(name, unit))';
 
 export type FinanceWarningCode =
   | 'cogs_is_current_catalog_not_historical'
+  | 'cogs_mixed_historical_and_estimated'
+  | 'cogs_historical_unavailable'
   | 'cogs_incomplete'
   | 'expenses_incomplete'
   | 'cargo_customs_held_out_of_net'
   | 'company_expenses_not_allocated_to_cities'
   | 'zero_revenue';
+
+export type FinanceCogsQuality = 'historical' | 'estimated' | 'mixed' | 'incomplete';
 
 export type FinanceExpenseRow = {
   id?: string | null;
@@ -59,6 +64,7 @@ export type FinanceExpenseRow = {
 };
 
 export type FinanceOrderItem = {
+  id?: string | null;
   product_id?: string | null;
   qty?: number | null;
   price?: number | null;
@@ -152,7 +158,8 @@ export type AdminFinanceReport = {
   productRows: FinanceProductRow[];
   warnings: FinanceWarningCode[];
   profitReliable: boolean;
-  cogsIsHistorical: false;
+  cogsQuality: FinanceCogsQuality;
+  cogsIsHistorical: boolean;
 };
 
 export type BuildAdminFinanceInput = {
@@ -168,6 +175,8 @@ export type BuildAdminFinanceInput = {
   noSellerLabel?: string;
   unnamedCityLabel?: string;
   expensesInputComplete?: boolean;
+  itemSnapshots?: Map<string, number | null> | null;
+  itemSnapshotsUnavailable?: boolean;
 };
 
 function money(n: number): number {
@@ -338,7 +347,10 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     noSellerLabel = 'Без продавца',
     unnamedCityLabel = 'Без города',
     expensesInputComplete = false,
+    itemSnapshots = new Map(),
+    itemSnapshotsUnavailable = false,
   } = input;
+  const snapshotMap = itemSnapshotsUnavailable ? null : itemSnapshots;
 
   const uniqueOrders = mergeFinanceOrders([orders]);
   const recognized = uniqueOrders.filter((o) => isConfirmedInRange(o, range));
@@ -349,6 +361,8 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
   let cogsKnown = 0;
   let giftCogsKnown = 0;
   let missingCostLineCount = 0;
+  let historicalLineCount = 0;
+  let estimatedLineCount = 0;
   const missingProducts = new Set<string>();
 
   type CityAcc = {
@@ -388,6 +402,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     unitCost: number | null;
     cogsKnown: number;
     costMissing: boolean;
+    units: Set<number>;
   };
   const productMap = new Map<string, ProdAcc>();
 
@@ -407,10 +422,19 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     return acc;
   };
 
-  const addCogs = (productId: string, qty: number, isGift: boolean, city: CityAcc, seller: SellerAcc) => {
+  const addCogs = (
+    productId: string,
+    qty: number,
+    isGift: boolean,
+    city: CityAcc,
+    seller: SellerAcc,
+    unit: number | null,
+    source: 'historical' | 'estimated' | 'unknown'
+  ) => {
     if (!(qty > 0)) return;
-    const unit = lookupUnitCost(costMap, productId);
-    if (unit == null) {
+    if (source === 'historical') historicalLineCount += 1;
+    else if (source === 'estimated') estimatedLineCount += 1;
+    if (unit == null || source === 'unknown') {
       missingCostLineCount += 1;
       missingProducts.add(productId || '__unknown__');
       city.missing.add(productId || '__unknown__');
@@ -458,44 +482,49 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
           qtySold: 0,
           qtyGift: 0,
           revenue: 0,
-          unitCost: lookupUnitCost(costMap, pid),
+          unitCost: null,
           cogsKnown: 0,
-          costMissing: lookupUnitCost(costMap, pid) == null,
+          costMissing: false,
+          units: new Set(),
         };
         productMap.set(pid, prod);
       }
       prod.qtySold += line.qty;
       prod.revenue = money(prod.revenue + line.revenue);
-      const unit = lookupUnitCost(costMap, pid);
-      if (unit == null) prod.costMissing = true;
-      else prod.cogsKnown = money(prod.cogsKnown + line.qty * unit);
     }
 
     for (const item of order.order_items ?? []) {
       const qty = Number(item.qty ?? 0);
       const pid = item.product_id || productLabel(item).name;
       const gift = item.is_gift === true;
-      addCogs(pid, qty, gift, city, seller);
-      if (gift && qty > 0) {
-        const { name, unit } = productLabel(item);
-        let prod = productMap.get(pid);
-        if (!prod) {
-          prod = {
-            name,
-            unit,
-            qtySold: 0,
-            qtyGift: 0,
-            revenue: 0,
-            unitCost: lookupUnitCost(costMap, pid),
-            cogsKnown: 0,
-            costMissing: lookupUnitCost(costMap, pid) == null,
-          };
-          productMap.set(pid, prod);
-        }
-        prod.qtyGift += qty;
-        const unitCost = lookupUnitCost(costMap, pid);
-        if (unitCost == null) prod.costMissing = true;
-        else prod.cogsKnown = money(prod.cogsKnown + qty * unitCost);
+      const catalog = lookupUnitCost(costMap, pid);
+      const resolved = resolveLineUnitCost({
+        snapshot: snapshotForItem(item, snapshotMap),
+        catalog,
+      });
+      addCogs(pid, qty, gift, city, seller, resolved.unit, resolved.source);
+      if (!(qty > 0)) continue;
+      const { name, unit } = productLabel(item);
+      let prod = productMap.get(pid);
+      if (!prod) {
+        prod = {
+          name,
+          unit,
+          qtySold: 0,
+          qtyGift: 0,
+          revenue: 0,
+          unitCost: null,
+          cogsKnown: 0,
+          costMissing: false,
+          units: new Set(),
+        };
+        productMap.set(pid, prod);
+      }
+      if (gift) prod.qtyGift += qty;
+      if (resolved.unit == null || resolved.source === 'unknown') prod.costMissing = true;
+      else {
+        prod.cogsKnown = money(prod.cogsKnown + qty * resolved.unit);
+        prod.units.add(resolved.unit);
       }
     }
   }
@@ -548,7 +577,21 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
   const preliminaryNetProfit = cogsComplete && !expensesInputComplete ? workingNet : null;
   const profitReliable = cogsComplete && expensesInputComplete;
 
-  const warnings: FinanceWarningCode[] = ['cogs_is_current_catalog_not_historical'];
+  const lineCount = historicalLineCount + estimatedLineCount + missingCostLineCount;
+  let cogsQuality: FinanceCogsQuality = 'estimated';
+  if (missingCostLineCount > 0) cogsQuality = 'incomplete';
+  else if (historicalLineCount > 0 && estimatedLineCount > 0) cogsQuality = 'mixed';
+  else if (historicalLineCount > 0 && estimatedLineCount === 0) cogsQuality = 'historical';
+  else cogsQuality = 'estimated';
+  if (itemSnapshotsUnavailable && cogsQuality === 'historical') cogsQuality = 'estimated';
+  const cogsIsHistorical = cogsQuality === 'historical' && !itemSnapshotsUnavailable && lineCount > 0;
+
+  const warnings: FinanceWarningCode[] = [];
+  if (itemSnapshotsUnavailable) warnings.push('cogs_historical_unavailable');
+  if (cogsQuality === 'mixed') warnings.push('cogs_mixed_historical_and_estimated');
+  else if (cogsQuality === 'estimated' && lineCount > 0 && !itemSnapshotsUnavailable) {
+    warnings.push('cogs_is_current_catalog_not_historical');
+  }
   if (!cogsComplete) warnings.push('cogs_incomplete');
   if (!expensesInputComplete) warnings.push('expenses_incomplete');
   warnings.push('cargo_customs_held_out_of_net');
@@ -618,7 +661,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
       qtySold: acc.qtySold,
       qtyGift: acc.qtyGift,
       revenue: acc.revenue,
-      unitCost: acc.unitCost,
+      unitCost: acc.units.size === 1 ? [...acc.units][0] : null,
       cogsKnown: acc.cogsKnown,
       costMissing: acc.costMissing,
       estimatedGrossProfit: acc.costMissing ? null : money(acc.revenue - acc.cogsKnown),
@@ -651,6 +694,7 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     productRows,
     warnings,
     profitReliable,
-    cogsIsHistorical: false,
+    cogsQuality,
+    cogsIsHistorical,
   };
 }

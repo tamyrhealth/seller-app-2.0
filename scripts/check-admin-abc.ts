@@ -26,9 +26,10 @@ function item(
   productId: string,
   qty: number,
   lineSum: number,
-  extra?: { gift?: boolean; name?: string }
+  extra?: { gift?: boolean; name?: string; id?: string }
 ): NonNullable<FinanceOrder['order_items']>[number] {
   return {
+    id: extra?.id,
     product_id: productId,
     qty,
     price: extra?.gift ? 0 : lineSum / qty,
@@ -170,6 +171,47 @@ if (gift.revenue !== 10000) fail('gift does not add revenue');
 if (gift.rows[0].qtyGift !== 1 || gift.rows[0].qtySold !== 2) fail('gift qty');
 if (gift.rows[0].cogsKnown !== 3000) fail('gift enters estimated cogs');
 if (gift.estimatedGrossProfit !== 7000) fail('gross after gift cogs');
+if (gift.cogsQuality !== 'estimated' || gift.cogsIsHistorical) fail('abc catalog is not historical');
+
+const snapAbc = abc(
+  {
+    costs: [{ id: 'p1', cost_price: 9999 }],
+    itemSnapshots: new Map([['abc-i1', 400]]),
+  },
+  [order({ id: 'o-snap', total_sum: 10000, order_items: [item('p1', 2, 10000, { name: 'Milk', id: 'abc-i1' })] })]
+);
+if (snapAbc.rows[0].cogsKnown !== 800) fail('abc uses snapshot not later catalog');
+if (snapAbc.estimatedGrossProfit !== 9200) fail('abc profit from snapshot');
+if (snapAbc.cogsQuality !== 'historical' || !snapAbc.cogsIsHistorical) fail('abc all snapshots historical');
+
+const mixedAbc = abc(
+  {
+    costs: [{ id: 'p1', cost_price: 1000 }],
+    itemSnapshots: new Map([
+      ['abc-h', 400],
+      ['abc-e', null],
+    ]),
+  },
+  [
+    order({
+      id: 'o-mix',
+      total_sum: 10000,
+      order_items: [
+        item('p1', 1, 5000, { name: 'Milk', id: 'abc-h' }),
+        item('p1', 1, 5000, { name: 'Milk', id: 'abc-e' }),
+      ],
+    }),
+  ]
+);
+if (mixedAbc.rows[0].cogsKnown !== 1400) fail('abc mixed snapshot+catalog');
+if (mixedAbc.cogsQuality !== 'mixed' || mixedAbc.cogsIsHistorical) fail('abc mixed is not historical');
+
+const rpcAbc = abc(
+  { costs: [{ id: 'p1', cost_price: 1000 }], itemSnapshotsUnavailable: true },
+  [order({ id: 'o-rpc', total_sum: 10000, order_items: [item('p1', 2, 10000, { name: 'Milk', id: 'abc-i1' })] })]
+);
+if (rpcAbc.rows[0].cogsKnown !== 2000) fail('abc rpc fail catalog fallback');
+if (rpcAbc.cogsIsHistorical) fail('abc rpc fail not historical');
 
 // --- unpaid debt vs repayment ---
 const unpaidDebt: FinanceOrder = {
@@ -407,6 +449,8 @@ if (!lib.includes('allocateOrderLines') && !read('lib/adminFinance.ts').includes
 if (!page.includes('Protected role="admin"')) fail('admin-only');
 if (!page.includes('fetchRecognizedWindow')) fail('recognized window');
 if (!page.includes('FINANCE_COSTS_RPC')) fail('admin_product_costs');
+if (!page.includes('FINANCE_ITEM_SNAPSHOTS_RPC') || !page.includes('snapshotsUnavailable')) fail('abc snapshot rpc');
+if (!page.includes('finance.cogsMixed')) fail('abc mixed banner');
 if (page.includes('cost_price') && page.includes("from('products')")) fail('must not select products.cost_price');
 if (!page.includes("select('id, is_active')")) fail('catalog without cost');
 if (!page.includes('bg-slate-50') || !page.includes('grid-cols-2')) fail('saas layout');

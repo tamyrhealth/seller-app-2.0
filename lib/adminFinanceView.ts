@@ -170,17 +170,20 @@ export function buildFinanceDaily(params: {
 }
 
 export function financeCogsKpi(report: AdminFinanceReport): FinanceKpi {
+  if (report.cogsIsHistorical) return { kind: 'fact', amount: report.cogsKnown };
   return { kind: 'estimate', amount: report.cogsKnown };
 }
 
 export function financeGrossKpi(report: AdminFinanceReport): FinanceKpi {
   if (!report.cogsComplete) return { kind: 'unavailable', amount: null };
+  if (report.cogsIsHistorical) return { kind: 'fact', amount: report.estimatedGrossProfit };
   return { kind: 'estimate', amount: report.estimatedGrossProfit };
 }
 
 export function financeNetKpi(report: AdminFinanceReport): FinanceKpi {
   if (!report.cogsComplete) return { kind: 'unavailable', amount: null };
   if (!report.expensesComplete) return { kind: 'preliminary', amount: report.preliminaryNetProfit };
+  if (report.cogsIsHistorical) return { kind: 'fact', amount: report.estimatedNetProfit };
   return { kind: 'estimate', amount: report.estimatedNetProfit };
 }
 
@@ -191,7 +194,15 @@ export function financeMarginKpi(report: AdminFinanceReport): FinanceKpi {
     if (report.preliminaryNetProfit == null) return { kind: 'unavailable', amount: null };
     return { kind: 'preliminary', amount: Number(((report.preliminaryNetProfit / report.revenue) * 100).toFixed(2)) };
   }
+  if (report.cogsIsHistorical) return { kind: 'fact', amount: report.netMarginPct };
   return { kind: 'estimate', amount: report.netMarginPct };
+}
+
+export function financeCogsHintKey(report: AdminFinanceReport): string {
+  if (report.warnings.includes('cogs_historical_unavailable')) return 'finance.snapshotsUnavailable';
+  if (report.cogsQuality === 'historical') return 'finance.cogsHintHistorical';
+  if (report.cogsQuality === 'mixed') return 'finance.cogsHintMixed';
+  return 'finance.cogsHint';
 }
 
 export function isSessionOnlyExpenseCompleteness(storedOnServer: boolean): boolean {

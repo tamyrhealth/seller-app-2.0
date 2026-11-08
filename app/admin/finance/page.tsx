@@ -28,9 +28,15 @@ import {
   type FinanceOrder,
 } from '@/lib/adminFinance';
 import {
+  collectFinanceOrderItemIds,
+  FINANCE_ITEM_SNAPSHOTS_RPC,
+  loadOrderItemCostSnapshots,
+} from '@/lib/adminFinanceSnapshots';
+import {
   buildFinanceDaily,
   expensesForCityView,
   FINANCE_PERIOD_PRESETS,
+  financeCogsHintKey,
   financeCogsKpi,
   financeGrossKpi,
   financeMarginKpi,
@@ -163,6 +169,8 @@ export default function AdminFinancePage() {
   const [debtTruncated, setDebtTruncated] = useState(false);
   const [costs, setCosts] = useState<ProductCostRow[] | null>(null);
   const [costError, setCostError] = useState<string | null>(null);
+  const [itemSnapshots, setItemSnapshots] = useState<Map<string, number | null>>(new Map());
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<FinanceExpenseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -273,7 +281,8 @@ export default function AdminFinancePage() {
           return;
         }
         setTruncated(rev.truncated);
-        setOrders(rev.orders as FinanceOrder[]);
+        const loadedOrders = rev.orders as FinanceOrder[];
+        setOrders(loadedOrders);
         if (costRes.error) {
           setCosts(null);
           setCostError(rpcMessage(costRes.error));
@@ -281,6 +290,12 @@ export default function AdminFinancePage() {
           setCosts((costRes.data || []) as ProductCostRow[]);
           setCostError(null);
         }
+        const snap = await loadOrderItemCostSnapshots(collectFinanceOrderItemIds(loadedOrders), (ids) =>
+          supabase.rpc(FINANCE_ITEM_SNAPSHOTS_RPC, { p_ids: ids })
+        );
+        if (cancelled) return;
+        setItemSnapshots(snap.map);
+        setSnapshotError(snap.error);
         setExpenses(parseFinanceExpensesList(expRes.data));
         setLoading(false);
       } catch (err) {
@@ -332,12 +347,16 @@ export default function AdminFinancePage() {
       noSellerLabel,
       unnamedCityLabel,
       expensesInputComplete: expensesComplete,
+      itemSnapshots,
+      itemSnapshotsUnavailable: Boolean(snapshotError),
     });
   }, [
     spec,
     orders,
     expenses,
     costs,
+    itemSnapshots,
+    snapshotError,
     cityId,
     cityNames,
     sellerNames,
@@ -572,6 +591,16 @@ export default function AdminFinancePage() {
                     : t('finance.costError')}
                 </p>
               ) : null}
+              {snapshotError ? (
+                <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {t('finance.snapshotsUnavailable')}
+                </p>
+              ) : null}
+              {report.cogsQuality === 'mixed' ? (
+                <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {t('finance.cogsMixed')}
+                </p>
+              ) : null}
               {!report.cogsComplete ? (
                 <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   {t('finance.cogsMissing')} {t('finance.cogsKnown')}: {formatMoney(report.cogsKnown)} ₸ ·{' '}
@@ -599,7 +628,7 @@ export default function AdminFinancePage() {
                 <KpiCard
                   label={t('finance.cogs')}
                   value={kpiText(cogsKpi)}
-                  hint={kpiHint(cogsKpi, t('finance.cogsHint'))}
+                  hint={kpiHint(cogsKpi, t(financeCogsHintKey(report)))}
                   tone="amber"
                 />
                 <KpiCard

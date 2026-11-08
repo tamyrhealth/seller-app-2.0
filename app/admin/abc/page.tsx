@@ -15,6 +15,11 @@ import {
   type AbcSortKey,
 } from '@/lib/adminAbcView';
 import { FINANCE_COSTS_RPC, type FinanceOrder } from '@/lib/adminFinance';
+import {
+  collectFinanceOrderItemIds,
+  FINANCE_ITEM_SNAPSHOTS_RPC,
+  loadOrderItemCostSnapshots,
+} from '@/lib/adminFinanceSnapshots';
 import { getTodayLocalISO } from '@/lib/datetime';
 import { fetchRecognizedWindow } from '@/lib/fetchAdminStatsOrders';
 import { runExclusive } from '@/lib/exclusiveAsync';
@@ -121,6 +126,8 @@ export default function AdminAbcPage() {
   const [truncated, setTruncated] = useState(false);
   const [costs, setCosts] = useState<ProductCostRow[] | null>(null);
   const [costError, setCostError] = useState<string | null>(null);
+  const [itemSnapshots, setItemSnapshots] = useState<Map<string, number | null>>(new Map());
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<Map<string, { isActive: boolean }>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -187,7 +194,8 @@ export default function AdminAbcPage() {
         }
         setTruncated(rev.truncated);
         setComplete(!rev.truncated);
-        setOrders(rev.orders as FinanceOrder[]);
+        const loadedOrders = rev.orders as FinanceOrder[];
+        setOrders(loadedOrders);
         if (costRes.error) {
           setCosts(null);
           setCostError(costRes.error.message || 'cost');
@@ -195,6 +203,12 @@ export default function AdminAbcPage() {
           setCosts((costRes.data || []) as ProductCostRow[]);
           setCostError(null);
         }
+        const snap = await loadOrderItemCostSnapshots(collectFinanceOrderItemIds(loadedOrders), (ids) =>
+          supabase.rpc(FINANCE_ITEM_SNAPSHOTS_RPC, { p_ids: ids })
+        );
+        if (cancelled) return;
+        setItemSnapshots(snap.map);
+        setSnapshotError(snap.error);
         if (!productRes.error) {
           setCatalog(
             new Map(
@@ -230,8 +244,10 @@ export default function AdminAbcPage() {
       catalogFilter,
       mode,
       complete,
+      itemSnapshots,
+      itemSnapshotsUnavailable: Boolean(snapshotError),
     });
-  }, [spec, orders, costs, cityId, catalog, catalogFilter, mode, complete]);
+  }, [spec, orders, costs, cityId, catalog, catalogFilter, mode, complete, itemSnapshots, snapshotError]);
 
   const tableRows = useMemo(() => {
     if (!report) return [];
@@ -360,6 +376,16 @@ export default function AdminAbcPage() {
               {costError || report.profitAbcBlockedReason === 'missing_cost' ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                   {costError ? t('abc.costError') : t('abc.missingCost')}
+                </div>
+              ) : null}
+              {snapshotError ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  {t('finance.snapshotsUnavailable')}
+                </div>
+              ) : null}
+              {report.cogsQuality === 'mixed' ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  {t('finance.cogsMixed')}
                 </div>
               ) : null}
               {mode === 'profit' && report.profitAbcBlockedReason === 'non_positive_total' ? (
