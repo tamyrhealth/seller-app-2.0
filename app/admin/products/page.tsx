@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { runExclusive } from '@/lib/exclusiveAsync';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
@@ -12,6 +13,7 @@ import {
   type ProductCostRow,
 } from '@/lib/productCost';
 import { PRODUCT_CATALOG_SELECT, type Product } from '@/lib/types';
+import { useTranslation } from '@/lib/i18n';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -38,6 +40,7 @@ function unitLabel(unit: string | null | undefined): string {
 }
 
 export default function AdminProductsPage() {
+  const { t } = useTranslation();
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -180,7 +183,15 @@ export default function AdminProductsPage() {
       <div className="min-h-screen bg-white">
         <NavAdmin />
         <div className="p-4">
-          <h1 className="text-2xl font-bold mb-4 text-gray-900">Товары</h1>
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <h1 className="text-2xl font-bold text-gray-900">Товары</h1>
+            <Link
+              href="/admin/products/costs"
+              className="px-3 py-2 rounded-lg bg-amber-100 text-amber-950 text-sm font-medium"
+            >
+              {t('productCosts.nav')}
+            </Link>
+          </div>
 
           <div className="flex gap-2 mb-4 flex-wrap items-center">
             <input
