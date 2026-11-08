@@ -29,6 +29,12 @@ export default function NavAdmin() {
         {t('finance.nav')}
       </Link>
       <Link
+        href="/admin/customers"
+        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
+      >
+        {t('customers.nav')}
+      </Link>
+      <Link
         href="/admin/new-order"
         className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
       >
