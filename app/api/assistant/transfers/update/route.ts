@@ -35,12 +35,11 @@ export async function POST(req: Request) {
   const items = Array.isArray(body.items) ? body.items.slice(0, 40) : [];
   const mapped = items
     .map((row) => ({
-      product_id: typeof row.product_id === 'string' ? row.product_id : '',
+      product_id: typeof row.product_id === 'string' && UUID_RE.test(row.product_id) ? row.product_id : '',
       qty: Number(row.qty),
       raw_name: typeof row.raw_name === 'string' ? row.raw_name.slice(0, 120) : '',
     }))
-    .filter((row) => UUID_RE.test(row.product_id));
-  if (!mapped.length) return jsonError(400, 'items', 'Добавьте товары из каталога.');
+    .filter((row) => Number.isFinite(row.qty) && row.qty > 0 && (row.product_id || row.raw_name));
 
   let userDb;
   try {

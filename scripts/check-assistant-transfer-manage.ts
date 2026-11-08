@@ -33,9 +33,10 @@ if (actorCanManageTransfers('admin', false).allowed !== true) fail('admin can ma
 if (actorCanManageTransfers('manager', true).allowed !== true) fail('manager with manage flag');
 if (actorCanManageTransfers('manager', false).allowed) fail('manager without manage flag cannot receive');
 if (actorCanManageTransfers('seller', true).allowed) fail('seller cannot manage transfers');
-if (actorCanCreateTransfer('manager', false, true).allowed !== true) fail('manage flag also allows create');
+if (actorCanCreateTransfer('manager', false, true).allowed) fail('manage flag must not create (SQL requires can_create_transfers)');
 if (actorCanCreateTransfer('manager', true, false).allowed !== true) fail('create-only still creates');
 if (actorCanCreateTransfer('manager', false, false).allowed) fail('manager without both flags cannot create');
+if (actorCanManageTransfers('manager', true).allowed !== true) fail('manage-only manager can still receive/manage');
 if (isAssistantRole('seller')) fail('seller is not assistant');
 
 if (parseTransferNumberQuery('Прими T000005') !== 'T000005') fail('parse T000005');

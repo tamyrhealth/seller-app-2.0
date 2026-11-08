@@ -1,7 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { resolveProductQuery, type CatalogProduct } from '@/lib/assistant/productAliases';
 import { qtyValidationError } from '@/lib/assistant/qty';
-import { matchTransferCities } from '@/lib/assistant/transferCityMatch';
+import {
+  geoCityForTransferQuery,
+  inCityPrepositional,
+  matchTransferWarehouses,
+} from '@/lib/assistant/transferCityMatch';
 import type { TransferIntent } from '@/lib/assistant/transferIntent';
 import type {
   TransferCityCandidate,
@@ -35,11 +39,11 @@ export function actorCanManageTransfers(
 export function actorCanCreateTransfer(
   role: string | null | undefined,
   canCreateTransfers: boolean,
-  canManageTransfers = false
+  _canManageTransfers = false
 ): { allowed: boolean; code: string; message: string } {
   if (role === 'admin') return { allowed: true, code: 'ok', message: '' };
   if (role === 'manager') {
-    if (canCreateTransfers || canManageTransfers) return { allowed: true, code: 'ok', message: '' };
+    if (canCreateTransfers) return { allowed: true, code: 'ok', message: '' };
     return {
       allowed: false,
       code: 'transfer_forbidden',
@@ -95,6 +99,49 @@ export function shouldFlagInsufficientStock(
   return qty > stock;
 }
 
+export function mergeTransferEditItems(
+  items: { product_id: string; qty: number; raw_name: string }[]
+): { product_id: string; qty: number; raw_name: string }[] {
+  const unresolved: { product_id: string; qty: number; raw_name: string }[] = [];
+  const byId = new Map<string, { product_id: string; qty: number; raw_name: string }>();
+  for (const row of items) {
+    if (!row.product_id) {
+      unresolved.push({ ...row, product_id: '' });
+      continue;
+    }
+    const prev = byId.get(row.product_id);
+    if (!prev) {
+      byId.set(row.product_id, { product_id: row.product_id, qty: Number(row.qty), raw_name: row.raw_name });
+      continue;
+    }
+    prev.qty += Number(row.qty);
+  }
+  return [...byId.values(), ...unresolved];
+}
+
+export function mergeResolvedTransferItems(items: TransferItemResolved[]): TransferItemResolved[] {
+  const out: TransferItemResolved[] = [];
+  const index = new Map<string, number>();
+  for (const item of items) {
+    if (!item.product_id) {
+      out.push({ ...item });
+      continue;
+    }
+    const at = index.get(item.product_id);
+    if (at == null) {
+      index.set(item.product_id, out.length);
+      out.push({ ...item });
+      continue;
+    }
+    out[at] = { ...out[at], qty: Number(out[at].qty) + Number(item.qty) };
+  }
+  return out.map((item) => {
+    if (!item.product_id) return item;
+    const qtyErr = qtyValidationError(item.qty, item.unit);
+    return { ...item, unresolved: Boolean(qtyErr) };
+  });
+}
+
 export function chooseTransferCity(
   query: string,
   cities: CityRow[],
@@ -111,22 +158,37 @@ export function chooseTransferCity(
     errors.push(issue(`${label}_city_missing`, `${prefix} город не указан.`));
     return { id: null, name: query || null, candidates: [], errors };
   }
-  const matches = matchTransferCities(query, cities.filter((c) => c.is_active !== false));
-  if (matches.length === 0) {
+  const hits = matchTransferWarehouses(query, cities);
+  const activeHits = hits.filter((c) => {
+    const row = cities.find((x) => x.id === c.id);
+    return row ? row.is_active !== false : true;
+  });
+  if (activeHits.length === 0 && hits.length > 0) {
+    const row = cities.find((c) => c.id === hits[0].id);
+    const name = row?.name || query;
+    errors.push(issue(`${label}_city_inactive`, `${prefix} город «${name}» неактивен.`));
+    return { id: null, name, candidates: [], errors };
+  }
+  if (activeHits.length === 0) {
     errors.push(issue(`${label}_city_not_found`, `${prefix} город «${query}» не найден. Новый склад не создаю.`));
     return { id: null, name: query, candidates: [], errors };
   }
-  const candidates = matches.map((c) => ({ id: c.id, name: c.name }));
-  if (matches.length > 1) {
+  const candidates = activeHits.map((c) => ({ id: c.id, name: c.name }));
+  if (activeHits.length > 1) {
+    const role = label === 'from' ? 'отправителя' : 'получателя';
+    const geo = geoCityForTransferQuery(query);
+    const place = geo ? inCityPrepositional(geo.nameRu) : query;
     errors.push(
       issue(
         `${label}_city_ambiguous`,
-        `${prefix} склад неоднозначен. Выберите один: ${candidates.map((c) => c.name).join(', ')}.`
+        geo
+          ? `В ${place} найдено несколько складов. Выберите ${role}.`
+          : `${prefix} склад неоднозначен. Выберите один: ${candidates.map((c) => c.name).join(', ')}.`
       )
     );
     return { id: null, name: query, candidates, errors };
   }
-  const city = matches[0];
+  const city = activeHits[0];
   const row = cities.find((c) => c.id === city.id);
   if (row && row.is_active === false) {
     errors.push(issue(`${label}_city_inactive`, `${prefix} город «${row.name}» неактивен.`));
@@ -228,8 +290,10 @@ export async function resolveTransferDraft(
     errors.push(issue('items_missing', 'Не указаны товары и количества для отправки.'));
   }
   for (const row of intent.items.slice(0, 40)) {
-    const item = resolveItem(row.raw_name, row.qty, catalog, stockByProduct, from.id);
-    items.push(item);
+    items.push(resolveItem(row.raw_name, row.qty, catalog, stockByProduct, from.id));
+  }
+  const mergedItems = mergeResolvedTransferItems(items);
+  for (const item of mergedItems) {
     const product = catalog.find((p) => p.id === item.product_id);
     if (!item.product_id) {
       if (item.candidates?.length) {
@@ -276,9 +340,10 @@ export async function resolveTransferDraft(
     to_city_name: to.name,
     to_city_candidates: to.candidates,
     comment: intent.comment,
-    items,
+    items: mergedItems,
   };
-  const can_confirm = errors.length === 0 && items.length > 0 && items.every((i) => i.product_id && !i.unresolved);
+  const can_confirm =
+    errors.length === 0 && mergedItems.length > 0 && mergedItems.every((i) => i.product_id && !i.unresolved);
   const preview: TransferPreviewCard = {
     can_confirm,
     errors,
@@ -318,8 +383,39 @@ export function applyTransferEdit(
   }
 
   const resolvedItems: TransferItemResolved[] = [];
-  if (!items.length) errors.push(issue('items_missing', 'Добавьте товары из каталога.'));
-  for (const row of items.slice(0, 40)) {
+  const editItems = mergeTransferEditItems(items).slice(0, 40);
+  if (!editItems.length) errors.push(issue('items_missing', 'Добавьте товары из каталога.'));
+  for (const row of editItems) {
+    if (!row.product_id) {
+      const item = resolveItem(row.raw_name, row.qty, catalog, stockByProduct, fromRow?.id || null);
+      resolvedItems.push(item);
+      if (!item.product_id) {
+        if (item.candidates?.length) {
+          errors.push(
+            issue(
+              'product_ambiguous',
+              `Товар «${item.raw_name}» неоднозначен: ${(item.candidates || []).map((c) => c.name).join(', ')}.`
+            )
+          );
+        } else {
+          errors.push(issue('product_not_found', `Товар «${row.raw_name}» не найден.`));
+        }
+      } else {
+        const product = catalog.find((p) => p.id === item.product_id);
+        if (product?.is_active === false) errors.push(issue('product_inactive', `Товар «${product.name}» неактивен.`));
+        const qtyErr = qtyValidationError(item.qty, item.unit);
+        if (qtyErr) errors.push(issue('qty_invalid', `${item.product_name}: ${qtyErr}`));
+        if (shouldFlagInsufficientStock(fromRow?.id || null, item.qty, item.stock)) {
+          errors.push(
+            issue(
+              'insufficient_stock',
+              `Недостаточно остатков «${item.product_name}» в ${fromRow?.name || 'исходном городе'}: нужно ${item.qty}, есть ${item.stock}.`
+            )
+          );
+        }
+      }
+      continue;
+    }
     const product = catalog.find((p) => p.id === row.product_id) || null;
     if (!product) {
       resolvedItems.push({

@@ -157,29 +157,43 @@ export default function AssistantTransferDraftCard({
   );
   const needFromPick = editable && !draft.resolved?.from_city_id && fromChoices.length > 1;
   const needToPick = editable && !draft.resolved?.to_city_id && toChoices.length > 1;
+  const needProductPick =
+    editable &&
+    !editing &&
+    Boolean(draft.resolved?.from_city_id) &&
+    Boolean(draft.resolved?.to_city_id) &&
+    (draft.resolved?.items || []).some((item) => !item.product_id && (item.candidates || []).length > 1);
   const showConfirm =
-    !editing && !sent && !cancelled && !needFromPick && !needToPick && (confirming || (editable && draft.can_confirm));
+    !editing &&
+    !sent &&
+    !cancelled &&
+    !needFromPick &&
+    !needToPick &&
+    !needProductPick &&
+    (confirming || (editable && draft.can_confirm));
   const showEditCancel = editable && !editing;
   const showButtons = showConfirm || showEditCancel;
 
   useEffect(() => {
-    if (!editable || catalog || (!needFromPick && !needToPick && fromChoices.length + toChoices.length === 0)) return;
-    if (fromChoices.some((c) => !c.id) || toChoices.some((c) => !c.id) || needFromPick || needToPick) {
+    if (!editable || catalog || (!needFromPick && !needToPick && !needProductPick && fromChoices.length + toChoices.length === 0)) return;
+    if (fromChoices.some((c) => !c.id) || toChoices.some((c) => !c.id) || needFromPick || needToPick || needProductPick) {
       void loadCatalog().catch((err) => {
         setLocalError(err instanceof Error ? err.message : 'Каталог недоступен.');
       });
     }
     // loadCatalog is stable enough for this card lifetime
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable, catalog, needFromPick, needToPick]);
+  }, [editable, catalog, needFromPick, needToPick, needProductPick]);
 
   async function saveWarehousePick(nextFrom: string, nextTo: string) {
     if (!nextFrom || !nextTo) return;
-    const mapped = seedLines(draft).filter((line) => line.product_id);
-    if (!mapped.length) {
-      setLocalError('Сначала укажите товары.');
-      return;
-    }
+    const mapped = seedLines(draft)
+      .map((line) => ({
+        product_id: line.product_id,
+        qty: Number(String(line.qty).replace(',', '.')),
+        raw_name: line.raw_name,
+      }))
+      .filter((line) => Number.isFinite(line.qty) && line.qty > 0 && (line.product_id || line.raw_name));
     setSaving(true);
     setLocalError('');
     try {
@@ -193,11 +207,7 @@ export default function AssistantTransferDraftCard({
           draftId: draft.id,
           from_city_id: nextFrom,
           to_city_id: nextTo,
-          items: mapped.map((line) => ({
-            product_id: line.product_id,
-            qty: Number(String(line.qty).replace(',', '.')),
-            raw_name: line.raw_name,
-          })),
+          items: mapped,
         }),
       });
       const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
@@ -229,7 +239,7 @@ export default function AssistantTransferDraftCard({
         <div className="mt-2 space-y-2 text-sm">
           {needFromPick ? (
             <label className="block">
-              <span className="block text-gray-600 mb-1">Исходный склад</span>
+              <span className="block text-gray-600 mb-1">Выберите отправителя</span>
               <select
                 value=""
                 disabled={saving || busy}
@@ -257,7 +267,7 @@ export default function AssistantTransferDraftCard({
           ) : null}
           {needToPick ? (
             <label className="block">
-              <span className="block text-gray-600 mb-1">Конечный склад</span>
+              <span className="block text-gray-600 mb-1">Выберите получателя</span>
               <select
                 value=""
                 disabled={saving || busy}
@@ -287,14 +297,73 @@ export default function AssistantTransferDraftCard({
       ) : null}
       {!editing ? (
         <ul className="mt-2 space-y-1 text-sm">
-          {items.map((item, idx) => (
-            <li key={`${item.name}-${idx}`}>
-              {item.name}: {item.qty}
-              {item.unit ? ` ${item.unit}` : ''}
-              {!sent && sourceReady && item.stock != null ? ` · остаток ${item.stock}` : ''}
-              {item.unresolved ? ' · не распознан' : ''}
-            </li>
-          ))}
+          {(draft.resolved?.items?.length ? draft.resolved.items : items).map((item, idx) => {
+            const resolvedItem = draft.resolved?.items?.[idx];
+            const candidates = resolvedItem?.candidates || ('candidates' in item ? item.candidates : []) || [];
+            const showPick = needProductPick && !resolvedItem?.product_id && candidates.length > 1;
+            const name = 'product_name' in item && item.product_name ? item.product_name : 'name' in item ? item.name : resolvedItem?.raw_name;
+            const qty = item.qty;
+            const unit = 'unit' in item ? item.unit : null;
+            const stock = 'stock' in item ? item.stock : null;
+            const unresolved = 'unresolved' in item ? item.unresolved : !resolvedItem?.product_id;
+            return (
+              <li key={`${name}-${idx}`}>
+                {name}: {qty}
+                {unit ? ` ${unit}` : ''}
+                {!sent && sourceReady && item.stock != null ? ` · остаток ${item.stock}` : ''}
+                {unresolved ? ' · не распознан' : ''}
+                {showPick ? (
+                  <div className="mt-1">
+                    <DraftProductPicker
+                      rawName={resolvedItem?.raw_name || String(name || '')}
+                      selectedId=""
+                      candidates={candidates.map((c) => ({ id: c.id, name: c.name, price: 0 }))}
+                      catalog={catalog?.products || []}
+                      disabled={saving || busy}
+                      onPick={(p) => {
+                        const current = seedLines(draft).map((line, lineIdx) =>
+                          lineIdx === idx ? { ...line, product_id: p.id, raw_name: p.name } : line
+                        );
+                        const fromId = draft.resolved?.from_city_id || fromCityId;
+                        const toId = draft.resolved?.to_city_id || toCityId;
+                        if (!fromId || !toId) return;
+                        void (async () => {
+                          setSaving(true);
+                          setLocalError('');
+                          try {
+                            const { data: sessionData } = await supabase.auth.getSession();
+                            const token = sessionData.session?.access_token;
+                            if (!token) throw new Error('Сессия истекла.');
+                            const res = await fetch('/api/assistant/transfers/update', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                              body: JSON.stringify({
+                                draftId: draft.id,
+                                from_city_id: fromId,
+                                to_city_id: toId,
+                                items: current.map((line) => ({
+                                  product_id: line.product_id,
+                                  qty: Number(String(line.qty).replace(',', '.')),
+                                  raw_name: line.raw_name,
+                                })),
+                              }),
+                            });
+                            const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+                            if (!res.ok || payload.ok === false) throw new Error(payload.message || 'Не удалось сохранить товар.');
+                            await onUpdated();
+                          } catch (err) {
+                            setLocalError(err instanceof Error ? err.message : 'Не удалось сохранить товар.');
+                          } finally {
+                            setSaving(false);
+                          }
+                        })();
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <div className="mt-2 space-y-2">
@@ -327,7 +396,11 @@ export default function AssistantTransferDraftCard({
               <DraftProductPicker
                 rawName={line.raw_name}
                 selectedId={line.product_id}
-                candidates={[]}
+                candidates={(draft.resolved?.items?.[idx]?.candidates || []).map((c) => ({
+                  id: c.id,
+                  name: c.name,
+                  price: 0,
+                }))}
                 catalog={catalog?.products || []}
                 onPick={(p) => {
                   const next = [...lines];
