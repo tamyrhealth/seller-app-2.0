@@ -60,6 +60,13 @@ export function activityOrderHref(entityId: string | null | undefined): string |
   return `/admin/orders?id=${encodeURIComponent(id)}`;
 }
 
+export function readOrderIdFromSearch(search: string): string | null {
+  const raw = search.startsWith('?') ? search : `?${search}`;
+  const id = new URLSearchParams(raw).get('id');
+  const trimmed = String(id || '').trim();
+  return trimmed || null;
+}
+
 export function activityOrderNumber(details: Record<string, unknown> | null | undefined): string | null {
   const raw = details?.order_number;
   if (typeof raw !== 'string') return null;
@@ -71,6 +78,26 @@ export function activityTotalSum(details: Record<string, unknown> | null | undef
   if (details == null || details.total_sum == null || details.total_sum === '') return null;
   const n = Number(details.total_sum);
   return Number.isFinite(n) ? n : null;
+}
+
+const CREATE_ACTIONS = new Set(['order_create', 'preorder_create', 'debt_create']);
+
+function hasLoggedItemSnapshot(details: Record<string, unknown> | null | undefined): boolean {
+  return Array.isArray(details?.items);
+}
+
+/** Old INSERT trigger stored total_sum=0 before confirm_order and had no items snapshot. */
+export function activitySumDisplay(
+  action: string | null | undefined,
+  details: Record<string, unknown> | null | undefined
+): { kind: 'unrecorded' } | { kind: 'hidden' } | { kind: 'value'; value: number } {
+  const sum = activityTotalSum(details);
+  const create = CREATE_ACTIONS.has(String(action || ''));
+  if (create && !hasLoggedItemSnapshot(details) && (sum === null || sum === 0)) {
+    return { kind: 'unrecorded' };
+  }
+  if (sum === null) return { kind: 'hidden' };
+  return { kind: 'value', value: sum };
 }
 
 export function activityCancelReturnedStock(details: Record<string, unknown> | null | undefined): boolean | null {

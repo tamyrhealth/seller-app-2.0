@@ -21,7 +21,7 @@ import {
   activityOrderHref,
   activityOrderNumber,
   activityPageRange,
-  activityTotalSum,
+  activitySumDisplay,
   fetchAdminOrderActivity,
   isActivityDateRangeInvalid,
   type ActivityLogRow,
@@ -199,7 +199,7 @@ export default function AdminActivityPage() {
             {rows.map((row) => {
               const details = row.details || {};
               const items = activityItems(details);
-              const totalSum = activityTotalSum(details);
+              const sumDisplay = activitySumDisplay(row.action, details);
               const number = activityOrderNumber(details);
               const href = activityOrderHref(row.entity_id);
               const reason = typeof details.reason === 'string' ? details.reason.trim() : '';
@@ -227,9 +227,11 @@ export default function AdminActivityPage() {
                       </>
                     ) : null}
                   </p>
-                  {totalSum != null ? (
+                  {sumDisplay.kind === 'unrecorded' ? (
+                    <p className="text-sm text-gray-900">{t('admin.sumNotRecorded')}</p>
+                  ) : sumDisplay.kind === 'value' ? (
                     <p className="text-sm text-gray-900">
-                      {t('admin.historySum')}: {formatMoney(totalSum)} ₸
+                      {t('admin.historySum')}: {formatMoney(sumDisplay.value)} ₸
                     </p>
                   ) : null}
                   {payment ? (

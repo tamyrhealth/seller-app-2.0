@@ -7,9 +7,11 @@ import {
   activityOrderHref,
   activityOrderNumber,
   activityPageRange,
+  activitySumDisplay,
   activityTotalSum,
   applyActivityLogFilters,
   isActivityDateRangeInvalid,
+  readOrderIdFromSearch,
 } from '../lib/adminActivity';
 import { orderHistoryActionLabel } from '../lib/orderActionHistory';
 
@@ -33,6 +35,25 @@ if (activityOrderNumber({ order_number: 'N000001' }) !== 'N000001') fail('order 
 if (activityOrderNumber({}) !== null) fail('missing number must stay empty');
 if (activityTotalSum({}) !== null) fail('missing sum must stay empty');
 if (activityTotalSum({ total_sum: 1500 }) !== 1500) fail('sum from details');
+if (activitySumDisplay('order_create', { total_sum: 0, order_number: 'N000039' }).kind !== 'unrecorded') {
+  fail('old create log with 0 and no items is unrecorded');
+}
+if (activitySumDisplay('preorder_create', { total_sum: 0 }).kind !== 'unrecorded') {
+  fail('old preorder create 0 is unrecorded');
+}
+if (activitySumDisplay('order_create', { total_sum: 0, items: [{ name: 'Gift', qty: 1, is_gift: true }] }).kind !== 'value') {
+  fail('create with item snapshot and 0 is a real zero');
+}
+const newSum = activitySumDisplay('order_create', {
+  total_sum: 5000,
+  items: [{ name: 'A', qty: 1, line_sum: 5000 }],
+});
+if (newSum.kind !== 'value' || newSum.value !== 5000) fail('new create log keeps real total');
+if (activitySumDisplay('preorder_fulfill', { total_sum: 5000, items: [] }).kind !== 'value') {
+  fail('fulfill total must stay');
+}
+if (readOrderIdFromSearch('?id=abc-uuid') !== 'abc-uuid') fail('parse order id query');
+if (readOrderIdFromSearch('') !== null) fail('empty search has no id');
 if (activityCancelReturnedStock({ already_canceled: true, returned_stock: false }) !== null) {
   fail('repeat cancel must not claim stock');
 }
@@ -105,6 +126,18 @@ if (!helper.includes("{ count: 'exact' }")) fail('pagination needs total count')
 if (actionLog.includes(".from('action_logs').insert")) fail('client must not insert action_logs');
 if (page.includes(".insert") && page.includes('action_logs')) fail('page must not write logs');
 if (page.includes(".from('action_logs')")) fail('page must query through helper, not ad-hoc');
+if (!page.includes('activitySumDisplay') || !i18n.includes('admin.sumNotRecorded')) {
+  fail('journal must explain unrecorded old totals');
+}
+
+const ordersPage = read('app/admin/orders/page.tsx');
+if (!ordersPage.includes('readOrderIdFromSearch')) fail('admin orders must open /admin/orders?id=');
+if (!ordersPage.includes('maybeSingle')) fail('open-by-id must load the order regardless of list filters');
+if (!ordersPage.includes('admin.orderNotFound')) fail('missing order message');
+if (!ordersPage.includes('closeOrderDetail')) fail('closing the card must not depend on date filters');
+if (!ordersPage.includes('activitySumDisplay')) fail('order history must reuse unrecorded-sum heuristic');
+if (ordersPage.includes('.single()')) fail('single() hides a missing order as a blank card');
+if (!ordersPage.includes('popstate')) fail('browser back should sync selected order id');
 
 const migrations = read('supabase/migrations/20261107200000_action_logs_protect_and_order_history.sql');
 if (/CREATE OR REPLACE FUNCTION public\.confirm_order/i.test(migrations)) fail('must not rewrite confirm_order');

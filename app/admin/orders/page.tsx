@@ -28,6 +28,7 @@ import {
   orderHistoryPaymentLabel,
   parseOrderHistoryItems,
 } from '@/lib/orderActionHistory';
+import { activitySumDisplay, readOrderIdFromSearch } from '@/lib/adminActivity';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -92,6 +93,8 @@ export default function AdminOrdersPage() {
   const [filterDebtStatus, setFilterDebtStatus] = useState<string>('active');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orderDetail, setOrderDetail] = useState<Order | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [fulfillingId, setFulfillingId] = useState<string | null>(null);
   const [payingDebtId, setPayingDebtId] = useState<string | null>(null);
@@ -173,6 +176,27 @@ export default function AdminOrdersPage() {
     supabase.from('cities').select('*').then(({ data }) => setCities(data || []));
     supabase.from('profiles').select('*').eq('role', 'seller').then(({ data }) => setProfiles(data || []));
   }, []);
+
+  useEffect(() => {
+    const syncFromUrl = () => {
+      setSelectedId(readOrderIdFromSearch(window.location.search));
+    };
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
+
+  function closeOrderDetail() {
+    setSelectedId(null);
+    setOrderDetail(null);
+    setDetailError(null);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('id')) return;
+    url.searchParams.delete('id');
+    const qs = url.searchParams.toString();
+    window.history.replaceState(window.history.state, '', `${url.pathname}${qs ? `?${qs}` : ''}${url.hash}`);
+  }
 
   const fromParts = parseDateStr(startDate);
   const toParts = parseDateStr(endDate);
@@ -335,15 +359,35 @@ export default function AdminOrdersPage() {
       setOrderDetail(null);
       setOrderHistory([]);
       setHistoryError(null);
+      setDetailError(null);
+      setDetailLoading(false);
       return;
     }
+    let cancelled = false;
     setHistoryError(null);
+    setDetailError(null);
+    setDetailLoading(true);
     supabase
       .from('orders')
       .select('*, order_items(*)')
       .eq('id', selectedId)
-      .single()
-      .then(({ data }) => setOrderDetail(data as Order | null));
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        setDetailLoading(false);
+        if (error) {
+          setOrderDetail(null);
+          setDetailError(error.message || t('admin.orderNotFound'));
+          return;
+        }
+        if (!data) {
+          setOrderDetail(null);
+          setDetailError(t('admin.orderNotFound'));
+          return;
+        }
+        setDetailError(null);
+        setOrderDetail(data as Order);
+      });
     supabase
       .from('action_logs')
       .select('id, created_at, action, user_name, user_role, details')
@@ -351,6 +395,7 @@ export default function AdminOrdersPage() {
       .eq('entity_id', selectedId)
       .order('created_at', { ascending: true })
       .then(({ data, error }) => {
+        if (cancelled) return;
         if (error) {
           setOrderHistory([]);
           setHistoryError(error.message || t('admin.historyError'));
@@ -359,7 +404,10 @@ export default function AdminOrdersPage() {
         setHistoryError(null);
         setOrderHistory((data as typeof orderHistory) ?? []);
       });
-  }, [selectedId, refreshKey]);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, refreshKey, t]);
 
   async function handleCancel(orderId: string, reason?: string | null) {
     await runExclusive(`admin-cancel:${orderId}`, async () => {
@@ -398,7 +446,7 @@ export default function AdminOrdersPage() {
           : null
       );
     }
-    setSelectedId(null);
+    closeOrderDetail();
     setRefreshKey((k) => k + 1);
     });
   }
@@ -740,10 +788,31 @@ export default function AdminOrdersPage() {
             </div>
           )}
 
+          {selectedId && !detailLoading && detailError && !orderDetail && (
+            <div
+              className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50"
+              onClick={closeOrderDetail}
+            >
+              <div
+                className="bg-white rounded-xl p-6 max-w-md w-full"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <p className="text-gray-900 mb-4">{detailError}</p>
+                <button
+                  type="button"
+                  onClick={closeOrderDetail}
+                  className="px-3 py-2 rounded-lg bg-gray-200 text-gray-900 text-sm font-medium"
+                >
+                  {t('common.close')}
+                </button>
+              </div>
+            </div>
+          )}
+
           {orderDetail && (
             <div
               className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50"
-              onClick={() => setSelectedId(null)}
+              onClick={closeOrderDetail}
             >
               <div
                 className="bg-white rounded-xl p-6 max-w-md w-full max-h-[80vh] overflow-auto"
@@ -803,7 +872,7 @@ export default function AdminOrdersPage() {
                       {orderHistory.map((h) => {
                         const details = (h.details || {}) as Record<string, unknown>;
                         const items = parseOrderHistoryItems(details);
-                        const total = details.total_sum == null ? null : Number(details.total_sum);
+                        const sumDisplay = activitySumDisplay(h.action, details);
                         const reason = typeof details.reason === 'string' ? details.reason : '';
                         const payment =
                           orderHistoryPaymentLabel(
@@ -818,9 +887,11 @@ export default function AdminOrdersPage() {
                             <p className="text-gray-600">
                               {t('admin.historyWho')}: {orderHistoryActorLabel(h.user_name, h.user_role)}
                             </p>
-                            {total != null && Number.isFinite(total) ? (
+                            {sumDisplay.kind === 'unrecorded' ? (
+                              <p>{t('admin.sumNotRecorded')}</p>
+                            ) : sumDisplay.kind === 'value' ? (
                               <p>
-                                {t('admin.historySum')}: {formatMoney(total)} ₸
+                                {t('admin.historySum')}: {formatMoney(sumDisplay.value)} ₸
                               </p>
                             ) : null}
                             {payment ? (
@@ -903,7 +974,7 @@ export default function AdminOrdersPage() {
                   </button>
                 )}
                 <button
-                  onClick={() => setSelectedId(null)}
+                  onClick={closeOrderDetail}
                   className="mt-2 w-full py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
                 >
                   {t('common.close')}
