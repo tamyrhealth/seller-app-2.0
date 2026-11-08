@@ -79,6 +79,25 @@ export type DebtSellerRow = {
   orderCount: number;
 };
 
+export type DebtSellerCityRow = {
+  key: string;
+  sellerName: string;
+  cityName: string;
+  orderCount: number;
+  amount: number;
+  overdueAmount: number;
+};
+
+export type UnpaidDebtSummary = {
+  unpaidDebtAmount: number;
+  unpaidDebtOrders: number;
+  unpaidDebtBySeller: DebtSellerRow[];
+  unpaidDebtBySellerCity: DebtSellerCityRow[];
+  overdueDebtAmount: number | null;
+  overdueDebtOrders: number | null;
+  overdueAvailable: boolean;
+};
+
 export type DailyPoint = {
   date: string;
   revenue: number;
@@ -246,6 +265,113 @@ export function isUnpaidDebt(order: StatsOrder): boolean {
   return order.debt_status === 'active' || order.debt_status == null;
 }
 
+/** Просрочка как в stats: due instant строго раньше now. */
+export function isOverdueUnpaidDebt(order: StatsOrder, now: Date): boolean {
+  if (!order.debt_due_at || String(order.debt_due_at).trim() === '') return false;
+  const due = new Date(order.debt_due_at);
+  return !Number.isNaN(due.getTime()) && due.getTime() < now.getTime();
+}
+
+export function summarizeUnpaidDebts(params: {
+  unpaidDebts: StatsOrder[];
+  sellerId?: string | 'all';
+  cityId?: string | 'all';
+  productId?: string | 'all';
+  sellerNames: Map<string, string>;
+  cityNames?: Map<string, string>;
+  deletedSellerLabel: string;
+  unnamedCityLabel?: string;
+  now?: Date;
+}): UnpaidDebtSummary {
+  const sellerId = params.sellerId ?? 'all';
+  const cityId = params.cityId ?? 'all';
+  const productId = params.productId ?? 'all';
+  const now = params.now ?? new Date();
+  const productFilterActive = productId !== 'all';
+  const unnamedCity = params.unnamedCityLabel || 'Без города';
+  const debtSeen = new Set<string>();
+  const debtSeller = new Map<string, { name: string; amount: number; orderCount: number }>();
+  const debtCity = new Map<
+    string,
+    { sellerName: string; cityName: string; amount: number; orderCount: number; overdueAmount: number }
+  >();
+  let unpaidDebtAmount = 0;
+  let unpaidDebtOrders = 0;
+  let overdueDebtAmount = 0;
+  let overdueDebtOrders = 0;
+  let overdueKnown = false;
+
+  for (const o of params.unpaidDebts) {
+    if (o.id) {
+      if (debtSeen.has(o.id)) continue;
+      debtSeen.add(o.id);
+    }
+    if (sellerId !== 'all' && o.seller_id !== sellerId) continue;
+    if (cityId !== 'all' && o.city_id !== cityId) continue;
+    if (!isUnpaidDebt(o)) continue;
+    if (productFilterActive) {
+      const has = (o.order_items ?? []).some((i) => matchesProductFilter(i, productId) && !isGift(i));
+      if (!has) continue;
+    }
+    const amount = money(o.total_sum);
+    unpaidDebtAmount += amount;
+    unpaidDebtOrders += 1;
+    const sl = sellerLabel(o.seller_id, params.sellerNames, params.deletedSellerLabel);
+    const ds = debtSeller.get(sl.key) || { name: sl.name, amount: 0, orderCount: 0 };
+    ds.amount += amount;
+    ds.orderCount += 1;
+    debtSeller.set(sl.key, ds);
+    const cityKey = o.city_id || '__none__';
+    const cityName = (o.city_id && params.cityNames?.get(o.city_id)) || unnamedCity;
+    const groupKey = `${sl.key}::${cityKey}`;
+    const gc = debtCity.get(groupKey) || {
+      sellerName: sl.name,
+      cityName,
+      amount: 0,
+      orderCount: 0,
+      overdueAmount: 0,
+    };
+    gc.amount += amount;
+    gc.orderCount += 1;
+    const overdue = isOverdueUnpaidDebt(o, now);
+    if (o.debt_due_at && String(o.debt_due_at).trim() !== '') {
+      overdueKnown = true;
+      if (overdue) {
+        overdueDebtAmount += amount;
+        overdueDebtOrders += 1;
+        gc.overdueAmount += amount;
+      }
+    }
+    debtCity.set(groupKey, gc);
+  }
+
+  return {
+    unpaidDebtAmount,
+    unpaidDebtOrders,
+    unpaidDebtBySeller: [...debtSeller.entries()]
+      .map(([key, v]) => ({ key, name: v.name, amount: v.amount, orderCount: v.orderCount }))
+      .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'ru')),
+    unpaidDebtBySellerCity: [...debtCity.entries()]
+      .map(([key, v]) => ({
+        key,
+        sellerName: v.sellerName,
+        cityName: v.cityName,
+        orderCount: v.orderCount,
+        amount: v.amount,
+        overdueAmount: v.overdueAmount,
+      }))
+      .sort(
+        (a, b) =>
+          b.amount - a.amount ||
+          a.sellerName.localeCompare(b.sellerName, 'ru') ||
+          a.cityName.localeCompare(b.cityName, 'ru')
+      ),
+    overdueAvailable: overdueKnown,
+    overdueDebtAmount: overdueKnown ? overdueDebtAmount : null,
+    overdueDebtOrders: overdueKnown ? overdueDebtOrders : null,
+  };
+}
+
 export function buildAdminStats(params: {
   orders: StatsOrder[];
   unpaidDebts: StatsOrder[];
@@ -386,43 +512,15 @@ export function buildAdminStats(params: {
     }))
     .sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name, 'ru'));
 
-  const debtSeen = new Set<string>();
-  const debtSeller = new Map<string, { name: string; amount: number; orderCount: number }>();
-  let unpaidDebtAmount = 0;
-  let unpaidDebtOrders = 0;
-  let overdueDebtAmount = 0;
-  let overdueDebtOrders = 0;
-  let overdueKnown = false;
-
-  for (const o of unpaidDebts) {
-    if (o.id) {
-      if (debtSeen.has(o.id)) continue;
-      debtSeen.add(o.id);
-    }
-    if (sellerId !== 'all' && o.seller_id !== sellerId) continue;
-    if (cityId !== 'all' && o.city_id !== cityId) continue;
-    if (!isUnpaidDebt(o)) continue;
-    if (productFilterActive) {
-      const has = (o.order_items ?? []).some((i) => matchesProductFilter(i, productId) && !isGift(i));
-      if (!has) continue;
-    }
-    const amount = money(o.total_sum);
-    unpaidDebtAmount += amount;
-    unpaidDebtOrders += 1;
-    const sl = sellerLabel(o.seller_id, sellerNames, deletedSellerLabel);
-    const ds = debtSeller.get(sl.key) || { name: sl.name, amount: 0, orderCount: 0 };
-    ds.amount += amount;
-    ds.orderCount += 1;
-    debtSeller.set(sl.key, ds);
-    if (o.debt_due_at && String(o.debt_due_at).trim() !== '') {
-      overdueKnown = true;
-      const due = new Date(o.debt_due_at);
-      if (!Number.isNaN(due.getTime()) && due.getTime() < now.getTime()) {
-        overdueDebtAmount += amount;
-        overdueDebtOrders += 1;
-      }
-    }
-  }
+  const debts = summarizeUnpaidDebts({
+    unpaidDebts,
+    sellerId,
+    cityId,
+    productId,
+    sellerNames,
+    deletedSellerLabel,
+    now,
+  });
 
   return {
     revenue,
@@ -435,14 +533,12 @@ export function buildAdminStats(params: {
     sellers,
     products: [...productMap.values()].sort((a, b) => b.qty - a.qty || b.revenue - a.revenue),
     daily: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
-    unpaidDebtAmount,
-    unpaidDebtOrders,
-    unpaidDebtBySeller: [...debtSeller.entries()]
-      .map(([key, v]) => ({ key, name: v.name, amount: v.amount, orderCount: v.orderCount }))
-      .sort((a, b) => b.amount - a.amount),
-    overdueAvailable: overdueKnown,
-    overdueDebtAmount: overdueKnown ? overdueDebtAmount : null,
-    overdueDebtOrders: overdueKnown ? overdueDebtOrders : null,
+    unpaidDebtAmount: debts.unpaidDebtAmount,
+    unpaidDebtOrders: debts.unpaidDebtOrders,
+    unpaidDebtBySeller: debts.unpaidDebtBySeller,
+    overdueAvailable: debts.overdueAvailable,
+    overdueDebtAmount: debts.overdueDebtAmount,
+    overdueDebtOrders: debts.overdueDebtOrders,
   };
 }
 

@@ -6,7 +6,8 @@ import NavAdmin from '@/components/NavAdmin';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 import { getTodayLocalISO } from '@/lib/datetime';
-import { fetchRecognizedWindow } from '@/lib/fetchAdminStatsOrders';
+import { fetchRecognizedWindow, fetchUnpaidDebts } from '@/lib/fetchAdminStatsOrders';
+import { summarizeUnpaidDebts, type StatsOrder } from '@/lib/adminStats';
 import { newClientOperationId, runExclusive } from '@/lib/exclusiveAsync';
 import {
   buildAdminFinance,
@@ -151,7 +152,12 @@ export default function AdminFinancePage() {
   const [customTo, setCustomTo] = useState(today);
   const [cityId, setCityId] = useState<string | 'all'>('all');
   const [cities, setCities] = useState<{ id: string; name: string }[]>([]);
+  const [sellers, setSellers] = useState<{ id: string; display_name: string | null }[]>([]);
   const [orders, setOrders] = useState<FinanceOrder[]>([]);
+  const [unpaidDebts, setUnpaidDebts] = useState<StatsOrder[]>([]);
+  const [debtLoading, setDebtLoading] = useState(true);
+  const [debtError, setDebtError] = useState<string | null>(null);
+  const [debtTruncated, setDebtTruncated] = useState(false);
   const [costs, setCosts] = useState<ProductCostRow[] | null>(null);
   const [costError, setCostError] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<FinanceExpenseRow[]>([]);
@@ -190,7 +196,37 @@ export default function AdminFinancePage() {
       .then(({ data, error: cityError }) => {
         if (!cityError) setCities(data || []);
       });
+    supabase
+      .from('profiles')
+      .select('id, display_name')
+      .eq('role', 'seller')
+      .then(({ data, error: sellerError }) => {
+        if (!sellerError) setSellers(data || []);
+      });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDebtLoading(true);
+    setDebtError(null);
+    (async () => {
+      const debts = await fetchUnpaidDebts();
+      if (cancelled) return;
+      if (debts.error) {
+        setDebtError(debts.error);
+        setUnpaidDebts([]);
+        setDebtTruncated(false);
+        setDebtLoading(false);
+        return;
+      }
+      setUnpaidDebts(debts.orders);
+      setDebtTruncated(debts.truncated);
+      setDebtLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   const periodKey = spec ? `${spec.fromYmd}:${spec.toYmd}` : 'invalid';
 
@@ -256,6 +292,25 @@ export default function AdminFinancePage() {
   }, [periodKey, refreshKey, spec]);
 
   const cityNames = useMemo(() => new Map(cities.map((c) => [c.id, c.name])), [cities]);
+  const sellerNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of sellers) m.set(s.id, (s.display_name || '').trim());
+    return m;
+  }, [sellers]);
+  const deletedSellerLabel = t('admin.deletedSeller');
+  const unnamedCityLabel = t('finance.noCity');
+  const receivables = useMemo(
+    () =>
+      summarizeUnpaidDebts({
+        unpaidDebts,
+        cityId,
+        sellerNames,
+        cityNames,
+        deletedSellerLabel,
+        unnamedCityLabel,
+      }),
+    [unpaidDebts, cityId, sellerNames, cityNames, deletedSellerLabel, unnamedCityLabel]
+  );
 
   const report: AdminFinanceReport | null = useMemo(() => {
     if (!spec) return null;
@@ -878,6 +933,96 @@ export default function AdminFinancePage() {
           ) : (
             <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500">{t('finance.empty')}</p>
           )}
+
+          <div className="mt-4 overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/70 shadow-sm">
+            <div className="border-b border-amber-100 px-4 py-3">
+              <h2 className="text-sm font-semibold text-amber-950">{t('finance.receivables')}</h2>
+              <p className="mt-1 text-xs font-medium text-amber-800">{t('finance.receivablesAsOfNow')}</p>
+              <p className="mt-1 text-xs text-amber-800/80">{t('finance.receivablesHint')}</p>
+            </div>
+            <div className="p-4">
+              {debtLoading ? (
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="h-24 animate-pulse rounded-2xl border border-amber-100 bg-white/80" />
+                  ))}
+                </div>
+              ) : debtError ? (
+                <p className="text-sm text-red-700">
+                  {t('finance.receivablesError')}: {financeErrorCopy(debtError, t)}
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {debtTruncated ? (
+                    <p className="text-sm text-amber-900">{t('finance.receivablesTruncated')}</p>
+                  ) : null}
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <KpiCard
+                      label={t('stats.unpaidDebts')}
+                      value={`${formatMoney(receivables.unpaidDebtAmount)} ₸`}
+                      hint={t('finance.receivablesAsOfNow')}
+                      tone="amber"
+                    />
+                    <KpiCard
+                      label={t('stats.unpaidDebtOrders')}
+                      value={formatCount(receivables.unpaidDebtOrders)}
+                      tone="amber"
+                    />
+                    {receivables.overdueAvailable ? (
+                      <>
+                        <KpiCard
+                          label={t('stats.overdueDebts')}
+                          value={`${formatMoney(receivables.overdueDebtAmount || 0)} ₸`}
+                          tone="rose"
+                        />
+                        <KpiCard
+                          label={t('stats.overdueDebtOrders')}
+                          value={formatCount(receivables.overdueDebtOrders || 0)}
+                          tone="rose"
+                        />
+                      </>
+                    ) : (
+                      <div className="col-span-2 rounded-2xl border border-amber-100 bg-white/80 p-4 text-sm text-amber-900">
+                        {t('stats.overdueUnavailable')}
+                      </div>
+                    )}
+                  </div>
+                  {receivables.unpaidDebtBySellerCity.length === 0 ? (
+                    <p className="text-sm text-amber-900">{t('finance.receivablesEmpty')}</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-2xl border border-amber-100 bg-white">
+                      <table className="w-full min-w-[520px] text-left text-sm">
+                        <thead className="text-xs text-slate-500">
+                          <tr>
+                            <th className="px-3 pb-2 pt-3 font-medium">{t('admin.seller')}</th>
+                            <th className="px-3 pb-2 pt-3 font-medium">{t('common.city')}</th>
+                            <th className="px-3 pb-2 pt-3 text-right font-medium">{t('stats.unpaidDebtOrders')}</th>
+                            <th className="px-3 pb-2 pt-3 text-right font-medium">{t('stats.unpaidDebts')}</th>
+                            <th className="px-3 pb-2 pt-3 text-right font-medium">{t('finance.overdueAmount')}</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {receivables.unpaidDebtBySellerCity.map((row) => (
+                            <tr key={row.key}>
+                              <td className="px-3 py-2">{row.sellerName}</td>
+                              <td className="px-3 py-2">{row.cityName}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{formatCount(row.orderCount)}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{formatMoney(row.amount)} ₸</td>
+                              <td className="px-3 py-2 text-right tabular-nums">
+                                {receivables.overdueAvailable
+                                  ? `${formatMoney(row.overdueAmount)} ₸`
+                                  : t('finance.unavailable')}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </Protected>

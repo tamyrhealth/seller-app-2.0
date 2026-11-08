@@ -1,7 +1,13 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { isConfirmedInRange, sumConfirmedInRange } from '../lib/accounting';
-import { buildAdminStats, resolvePeriod, type StatsOrder } from '../lib/adminStats';
+import {
+  buildAdminStats,
+  isOverdueUnpaidDebt,
+  resolvePeriod,
+  summarizeUnpaidDebts,
+  type StatsOrder,
+} from '../lib/adminStats';
 import { addDaysYmd, startOfYearYmd } from '../lib/datetime';
 import {
   buildAdminFinance,
@@ -491,6 +497,85 @@ if (statsSame.revenue !== financeSame.revenue) fail('finance revenue must match 
 if (statsSame.orderCount !== financeSame.recognizedOrderCount) fail('finance order count must match stats');
 if (Number(statsSame.averageCheck.toFixed(2)) !== financeSame.averageCheck) fail('finance AOV must match stats');
 
+const nowAlmaty = new Date('2026-11-08T12:00:00+05:00');
+const sellerNames = new Map([['s1', 'Айдар'], ['s2', 'Болат']]);
+const debtBase: StatsOrder = {
+  id: 'd1',
+  seller_id: 's1',
+  city_id: 'c1',
+  total_sum: 5000,
+  status: 'confirmed',
+  payment_type: 'debt',
+  is_debt: true,
+  debt_status: 'active',
+  created_at: '2026-10-01T06:00:00.000Z',
+};
+function debtSnap(unpaidDebts: StatsOrder[], cityId: string | 'all' = 'all') {
+  return summarizeUnpaidDebts({
+    unpaidDebts,
+    cityId,
+    sellerNames,
+    cityNames,
+    deletedSellerLabel: 'Удалённый продавец',
+    unnamedCityLabel: 'Без города',
+    now: nowAlmaty,
+  });
+}
+const emptyDebt = debtSnap([]);
+if (emptyDebt.unpaidDebtAmount !== 0 || emptyDebt.unpaidDebtOrders !== 0) fail('no debts');
+if (emptyDebt.overdueAvailable) fail('no overdue without due dates');
+
+const oneOpen = debtSnap([debtBase]);
+if (oneOpen.unpaidDebtAmount !== 5000 || oneOpen.unpaidDebtOrders !== 1) fail('one open debt');
+if (oneOpen.unpaidDebtBySellerCity.length !== 1 || oneOpen.unpaidDebtBySellerCity[0].sellerName !== 'Айдар') {
+  fail('one debt table seller');
+}
+if (oneOpen.unpaidDebtBySellerCity[0].cityName !== 'Атырау') fail('one debt table city');
+
+const paidDebt: StatsOrder = { ...debtBase, id: 'd-paid', debt_status: 'paid', debt_paid_at: '2026-11-01T00:00:00.000Z' };
+const canceledDebt: StatsOrder = { ...debtBase, id: 'd-cancel', status: 'canceled' };
+if (debtSnap([paidDebt, canceledDebt]).unpaidDebtOrders !== 0) fail('paid and canceled are not open AR');
+
+const overdueDebt: StatsOrder = { ...debtBase, id: 'd-over', debt_due_at: '2026-11-07T12:00:00+05:00' };
+const futureDebt: StatsOrder = {
+  ...debtBase,
+  id: 'd-future',
+  seller_id: 's2',
+  city_id: 'c2',
+  total_sum: 3000,
+  debt_due_at: '2026-11-09T12:00:00+05:00',
+};
+if (!isOverdueUnpaidDebt(overdueDebt, nowAlmaty)) fail('past due is overdue');
+if (isOverdueUnpaidDebt(futureDebt, nowAlmaty)) fail('future due is not overdue');
+if (isOverdueUnpaidDebt({ ...debtBase, debt_due_at: '2026-11-08T12:00:00+05:00' }, nowAlmaty)) {
+  fail('due equal now is not overdue');
+}
+
+const mixed = debtSnap([overdueDebt, futureDebt, paidDebt, canceledDebt, debtBase]);
+if (mixed.unpaidDebtOrders !== 3 || mixed.unpaidDebtAmount !== 13000) fail('mixed open debts');
+if (mixed.overdueDebtAmount !== 5000 || mixed.overdueDebtOrders !== 1) fail('overdue subset');
+if (mixed.unpaidDebtBySellerCity.length !== 2) fail('seller-city groups');
+const statsDebt = buildAdminStats({
+  orders: [paid] as StatsOrder[],
+  unpaidDebts: [overdueDebt, futureDebt, paidDebt, canceledDebt, debtBase],
+  range,
+  sellerId: 'all',
+  cityId: 'all',
+  productId: 'all',
+  sellerNames,
+  deletedSellerLabel: 'Удалённый продавец',
+  now: nowAlmaty,
+});
+if (statsDebt.unpaidDebtAmount !== mixed.unpaidDebtAmount) fail('finance AR must match stats amount');
+if (statsDebt.unpaidDebtOrders !== mixed.unpaidDebtOrders) fail('finance AR must match stats count');
+if (statsDebt.overdueDebtAmount !== mixed.overdueDebtAmount) fail('finance overdue must match stats');
+if (statsDebt.overdueDebtOrders !== mixed.overdueDebtOrders) fail('finance overdue orders must match stats');
+if (financeSame.revenue !== 18000) fail('AR must not be added to recognized revenue');
+if (debtSnap([overdueDebt, futureDebt], 'c2').unpaidDebtAmount !== 3000) fail('city filter on AR');
+if (debtSnap([{ ...debtBase, created_at: '2025-01-01T00:00:00.000Z' }]).unpaidDebtOrders !== 1) {
+  fail('open AR is not limited to the P&L period');
+}
+
 const citySplit = expensesForCityView(
   [
     { id: 'a', city_id: 'c1', amount: 10, category: 'ads', expense_date: '2026-11-08' },
@@ -578,6 +663,12 @@ if (!i18n.includes("'finance.net': 'Оценочная чистая прибыл
   fail('i18n estimated net');
 }
 if (!page.includes('fetchRecognizedWindow') || !page.includes('finance.truncated')) fail('same order window and truncation banner');
+if (!page.includes('fetchUnpaidDebts') || !page.includes('summarizeUnpaidDebts')) fail('reuse stats unpaid debts');
+if (!page.includes('finance.receivables') || !page.includes('finance.receivablesAsOfNow')) fail('AR as-of-now copy');
+if (!page.includes('border-amber-200')) fail('AR visually distinct from P&L');
+if (!page.includes('[refreshKey]')) fail('AR fetch independent of period');
+if (page.includes('customer_phone') || page.includes('debt_customer')) fail('must not show customer PII on finance');
+if (src.includes('unpaidDebtAmount') || src.includes('fetchUnpaidDebts')) fail('P&L builder must not mix AR');
 if (!read('lib/fetchAdminStatsOrders.ts').includes('ORDER_STATS_MAX')) fail('order cap still in fetch');
 if (!read('lib/accounting.ts').includes('getAccountingDate')) fail('accounting module intact');
 if (!i18n.includes("'finance.permissionDenied':") || !i18n.includes("'finance.networkError':")) fail('i18n rpc errors');
