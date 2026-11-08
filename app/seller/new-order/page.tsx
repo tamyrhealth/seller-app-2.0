@@ -18,6 +18,7 @@ import {
   runConfirmOrderOnce,
 } from '@/lib/orderIdempotency';
 import type { Product, PaymentType } from '@/lib/types';
+import { applyCustomerToConfirmPayload } from '@/lib/orderCustomer';
 import { clearOrderFormDraft, useOrderFormDraft, type OrderFormDraft } from '@/lib/orderFormDraft';
 import SimilarOrdersWarning from '@/components/SimilarOrdersWarning';
 import {
@@ -302,7 +303,7 @@ export default function NewOrderPage() {
       const pickedDate = pickupDate && pickupDate.trim() !== '' ? pickupDate.trim() : null;
 
       const pickup = isPreorderToggle ? (pickedDate ?? todayYYYYMMDD) : null;
-      const debtName = isDebtToggle ? (debtCustomerName ?? '').toString().trim() || null : null;
+      const customerName = (debtCustomerName ?? '').toString().trim() || null;
       const debtDue = isDebtToggle ? (debtDueAt ?? '').toString().trim() || null : null;
       const debtNoteVal = isDebtToggle ? (debtNote ?? '').toString().trim() || null : null;
       const commentVal = isDebtToggle ? null : comment || null;
@@ -316,13 +317,13 @@ export default function NewOrderPage() {
         pickup_date: isDebtToggle ? null : pickup,
       };
 
-      if (isDebtToggle) {
-        payload.is_debt = true;
-        payload.debt_customer_phone = phone;
-        payload.debt_customer_name = debtName;
-        payload.debt_due_at = debtDue;
-        payload.debt_note = debtNoteVal;
-      }
+      applyCustomerToConfirmPayload(payload, {
+        isDebt: isDebtToggle,
+        name: customerName,
+        phone: phone || null,
+        debtDueAt: debtDue,
+        debtNote: debtNoteVal,
+      });
 
       const fingerprint = buildClientOrderFingerprint({
         actorUserId: profile.id,
@@ -334,22 +335,24 @@ export default function NewOrderPage() {
         comment: commentVal,
         pickupDate: pickup,
         debtCustomerPhone: isDebtToggle ? phone : null,
-        debtCustomerName: debtName,
+        debtCustomerName: isDebtToggle ? customerName : null,
         debtDueAt: debtDue,
         debtNote: debtNoteVal,
+        customerName,
+        customerPhone: phone || null,
         items,
       });
       const composition = similarCompositionKey({
         sellerId: profile.id,
         cityId,
-        customerPhone: isDebtToggle ? phone : null,
+        customerPhone: phone || null,
         items,
       });
       const similar = await lookupSimilarOrders(supabase, {
         sellerId: profile.id,
         cityId,
         items,
-        customerPhone: isDebtToggle ? phone : null,
+        customerPhone: phone || null,
         excludeIdempotencyKey: peekOrderIdempotencyKey(profile.id, fingerprint),
       });
       if (!similar.ok) {
@@ -650,18 +653,27 @@ export default function NewOrderPage() {
                   </div>
                 </>
               )}
-              {orderType === 'debt' && (
-                <div>
-                  <label className="block text-sm font-medium mb-1 text-gray-900">{t('newOrder.phoneRequired')}</label>
-                  <input
-                    type="tel"
-                    value={debtCustomerPhone}
-                    onChange={(e) => setDebtCustomerPhone(e.target.value)}
-                    placeholder={t('newOrder.phonePlaceholder')}
-                    className="w-full max-w-full px-4 py-3 border border-gray-300 rounded-xl min-h-[48px] text-gray-900 placeholder-gray-400 bg-white"
-                  />
-                </div>
-              )}
+              <div>
+                <label className="block text-sm font-medium mb-1 text-gray-900">{t('newOrder.customerNameOptional')}</label>
+                <input
+                  type="text"
+                  value={debtCustomerName}
+                  onChange={(e) => setDebtCustomerName(e.target.value)}
+                  className="w-full max-w-full px-4 py-3 border border-gray-300 rounded-xl min-h-[48px] text-gray-900 placeholder-gray-400 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1 text-gray-900">
+                  {orderType === 'debt' ? t('newOrder.phoneRequired') : t('newOrder.customerPhoneOptional')}
+                </label>
+                <input
+                  type="tel"
+                  value={debtCustomerPhone}
+                  onChange={(e) => setDebtCustomerPhone(e.target.value)}
+                  placeholder={t('newOrder.phonePlaceholder')}
+                  className="w-full max-w-full px-4 py-3 border border-gray-300 rounded-xl min-h-[48px] text-gray-900 placeholder-gray-400 bg-white"
+                />
+              </div>
               {orderType !== 'debt' && (
                 <div>
                   <label className="block text-sm font-medium mb-1 text-gray-900">{t('newOrder.commentOptional')}</label>
@@ -685,7 +697,7 @@ export default function NewOrderPage() {
                         composition: similarCompositionKey({
                           sellerId: profile.id,
                           cityId,
-                          customerPhone: orderType === 'debt' ? debtCustomerPhone : null,
+                          customerPhone: debtCustomerPhone || null,
                           items: cart.map((item) => ({ product_id: item.product_id, qty: item.qty ?? 0 })),
                         }),
                         matchIds: similarMatchIds(similarWarning),

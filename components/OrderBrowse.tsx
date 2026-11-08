@@ -6,6 +6,7 @@ import { useTranslation } from '@/lib/i18n';
 import { displayOrderNumber, parseOrderNumberQuery } from '@/lib/orderNumber';
 import { isCanceledStatus, orderStatusI18nKey } from '@/lib/orderStatus';
 import type { City, Order, Profile } from '@/lib/types';
+import { orderCustomerDisplay } from '@/lib/orderCustomer';
 import { useAuth } from '@/lib/auth';
 import { useUserUiState } from '@/lib/useUserUiState';
 
@@ -39,7 +40,7 @@ function formatPaymentType(pt: string | null | undefined): string {
 const LIST_SELECT =
   'id, order_number, created_at, total_sum, status, payment_type, city_id, seller_id, is_preorder, preorder_status, is_debt, debt_status, pickup_date';
 
-const DETAIL_SELECT = `${LIST_SELECT}, comment, fulfilled_at, debt_due_at, debt_paid_at, debt_customer_name, debt_customer_phone, debt_note, order_items(id, product_name_snapshot, qty, price, line_sum, is_gift)`;
+const DETAIL_SELECT = `${LIST_SELECT}, comment, fulfilled_at, debt_due_at, debt_paid_at, debt_customer_name, debt_customer_phone, debt_note, customer_name, customer_phone, order_items(id, product_name_snapshot, qty, price, line_sum, is_gift)`;
 
 type BrowseFilters = {
   filterCity: string;
@@ -294,7 +295,7 @@ export default function OrderBrowse() {
             {detail.is_debt && (
               <>
                 <p className="text-gray-900">
-                  {t('common.client')}: {[detail.debt_customer_name, detail.debt_customer_phone].filter(Boolean).join(' · ') || '—'}
+                  {t('common.client')}: {orderCustomerDisplay(detail)}
                 </p>
                 <p className="text-gray-900">
                   {t('admin.debtDue')}: {detail.debt_due_at ? new Date(detail.debt_due_at).toLocaleDateString('ru-KZ') : '—'}

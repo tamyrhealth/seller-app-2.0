@@ -104,6 +104,13 @@ if (fpDebt === fpDebtPhone) fail('debt phone must be part of fingerprint');
 const fpActor = buildClientOrderFingerprint({ ...base, actorUserId: 'user-b' });
 if (fp1 === fpActor) fail('actor must be part of fingerprint');
 
+const fpEmptyCustomer = buildClientOrderFingerprint({ ...base, customerName: '', customerPhone: null });
+if (fp1 !== fpEmptyCustomer) fail('missing customer must match old cash fingerprint');
+const fpCustomer = buildClientOrderFingerprint({ ...base, customerName: 'A', customerPhone: '87771234567' });
+if (fp1 === fpCustomer) fail('cash customer must be part of fingerprint');
+const fpCustomerOther = buildClientOrderFingerprint({ ...base, customerName: 'A', customerPhone: '87770000000' });
+if (fpCustomer === fpCustomerOther) fail('same key with another customer must not match');
+
 const tabA = makeStorage();
 const tabB = makeStorage();
 installTab(tabA);

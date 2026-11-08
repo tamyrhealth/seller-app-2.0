@@ -1,3 +1,5 @@
+import { normalizeCustomerPhone as normalizeReliableCustomerPhone } from './customerPhone';
+
 export const SIMILAR_ORDER_WINDOW_SECONDS = 900;
 export const SIMILAR_SQL_HINT = 'Сначала примените SQL этапа 5.4.1. Поиск похожих заказов недоступен — подтверждение остановлено.';
 
@@ -36,8 +38,7 @@ type RpcClient = {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function normalizeCustomerPhone(raw: string | null | undefined): string | null {
-  const digits = String(raw ?? '').replace(/\D/g, '');
-  return digits.length >= 10 ? digits : null;
+  return normalizeReliableCustomerPhone(raw);
 }
 
 export function buildSimilarItemBag(items: SimilarOrderItem[]): Array<{ product_id: string; qty: number; is_gift: boolean }> {

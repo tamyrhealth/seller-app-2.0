@@ -84,7 +84,43 @@ const keyBlank = similarCompositionKey({
   ],
 });
 if (keyAnon !== keyBlank) fail('weak/short phone is not an identity');
-if (normalizeCustomerPhone('77001112233') !== '77001112233') fail('phone digits');
+if (normalizeCustomerPhone('77001112233') !== '+77001112233') fail('phone canon');
+if (normalizeCustomerPhone('87771234567') !== normalizeCustomerPhone('+77771234567')) fail('8 and +7 same similar identity');
+if (normalizeCustomerPhone('123') !== null) fail('invalid phone is not an identity');
+
+const key8 = similarCompositionKey({
+  sellerId: 's1',
+  cityId: 'c1',
+  customerPhone: '87771234567',
+  items: [{ product_id: a, qty: 1 }],
+});
+const keyPlus = similarCompositionKey({
+  sellerId: 's1',
+  cityId: 'c1',
+  customerPhone: '+77771234567',
+  items: [{ product_id: a, qty: 1 }],
+});
+const key10 = similarCompositionKey({
+  sellerId: 's1',
+  cityId: 'c1',
+  customerPhone: '7771234567',
+  items: [{ product_id: a, qty: 1 }],
+});
+if (key8 !== keyPlus || keyPlus !== key10) fail('valid phone formats must share composition');
+const keyInvalid = similarCompositionKey({
+  sellerId: 's1',
+  cityId: 'c1',
+  customerPhone: '12345',
+  items: [{ product_id: a, qty: 1 }],
+});
+const keyNone = similarCompositionKey({
+  sellerId: 's1',
+  cityId: 'c1',
+  customerPhone: null,
+  items: [{ product_id: a, qty: 1 }],
+});
+if (keyInvalid !== keyNone) fail('invalid phone must stay anonymous, not a person');
+if (key8 === keyNone) fail('valid phone must not collapse into anonymous');
 if (normalizeCustomerPhone('12345') !== null) fail('short phone is not reliable');
 
 const m1 = { order_id: a, order_number: 'N1', created_at: null, status: 'confirmed' };

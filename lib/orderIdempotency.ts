@@ -22,6 +22,8 @@ export type OrderIdempotencyInput = {
   debtCustomerName: string | null;
   debtDueAt: string | null;
   debtNote: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
   items: OrderIdempotencyItem[];
 };
 
@@ -59,7 +61,7 @@ export function buildClientOrderFingerprint(input: OrderIdempotencyInput): strin
         a.qty - b.qty ||
         a.price.localeCompare(b.price)
     );
-  return JSON.stringify({
+  const body: Record<string, unknown> = {
     actor_id: input.actorUserId,
     seller_id: input.sellerId,
     city_id: input.cityId,
@@ -73,7 +75,16 @@ export function buildClientOrderFingerprint(input: OrderIdempotencyInput): strin
     debt_due_at: input.isDebt ? normText(input.debtDueAt) : '',
     debt_note: input.isDebt ? normText(input.debtNote) : '',
     items,
-  });
+  };
+  if (!input.isDebt) {
+    const customerName = normText(input.customerName);
+    const customerPhone = normText(input.customerPhone);
+    if (customerName || customerPhone) {
+      body.customer_name = customerName;
+      body.customer_phone = customerPhone;
+    }
+  }
+  return JSON.stringify(body);
 }
 
 function storageOf(kind: 'localStorage' | 'sessionStorage'): Storage | null {

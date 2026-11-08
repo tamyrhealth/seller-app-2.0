@@ -29,6 +29,7 @@ import {
   parseOrderHistoryItems,
 } from '@/lib/orderActionHistory';
 import { activitySumDisplay, readOrderIdFromSearch } from '@/lib/adminActivity';
+import { orderCustomerDisplay } from '@/lib/orderCustomer';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -742,7 +743,7 @@ export default function AdminOrdersPage() {
                       )}
                       {viewMode === 'debts' && (
                         <>
-                          <td className="p-2 text-gray-900">{[o.debt_customer_name, o.debt_customer_phone].filter(Boolean).join(' · ') || '—'}</td>
+                          <td className="p-2 text-gray-900">{orderCustomerDisplay(o)}</td>
                           <td className="p-2 text-gray-900">{o.debt_due_at ? new Date(o.debt_due_at).toLocaleDateString('ru-KZ') : '—'}</td>
                           <td className="p-2">
                             {o.debt_status === 'active' && (
@@ -857,7 +858,7 @@ export default function AdminOrdersPage() {
                 )}
                 {orderDetail.is_debt && (
                   <>
-                    <p className="text-gray-900">{t('common.client')}: {[orderDetail.debt_customer_name, orderDetail.debt_customer_phone].filter(Boolean).join(' · ') || '—'}</p>
+                    <p className="text-gray-900">{t('common.client')}: {orderCustomerDisplay(orderDetail)}</p>
                     <p className="text-gray-900">{t('admin.debtDue')}: {orderDetail.debt_due_at ? new Date(orderDetail.debt_due_at).toLocaleDateString('ru-KZ') : '—'}</p>
                     {orderDetail.debt_paid_at && <p className="text-gray-900">{t('admin.paidAt')}: {formatDate(orderDetail.debt_paid_at)}</p>}
                     {orderDetail.debt_note && <p className="text-sm text-gray-600">{t('admin.note')}: {orderDetail.debt_note}</p>}

@@ -112,7 +112,7 @@ export async function generateAssistantTurn(
         errors: resolved.errors,
         resolved: resolved.resolved,
         preview: resolved.preview,
-        customer_phone: resolved.resolved.is_debt ? phones[0] || null : null,
+        customer_phone: phones[0] || null,
         idempotency_key: randomUUID(),
       };
       return { content: buildDraftChatMessage(resolved), draft, transfer: null, cancel: null, transferManage: null };

@@ -338,8 +338,10 @@ export async function revalidateResolved(
     is_preorder: resolved.is_preorder && !resolved.is_debt,
     pickup_date: resolved.is_preorder ? resolved.pickup_date : null,
   };
+  const phone = (debtPhone || '').trim();
+  if (phone) payload.customer_phone = phone;
+  if (resolved.debt_customer_name) payload.customer_name = resolved.debt_customer_name;
   if (resolved.is_debt) {
-    const phone = (debtPhone || '').trim();
     if (!phone) {
       return { ok: false, errors: [issue('debt_phone', 'Для долга нужен телефон.')], payload: null };
     }

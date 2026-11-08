@@ -259,6 +259,7 @@ export async function POST(req: Request) {
   const similarSeller = String(check.payload?.seller_id || live.resolved?.seller_id || '');
   const similarCity = String(check.payload?.city_id || live.resolved?.city_id || '');
   const similarPhone =
+    (typeof check.payload?.customer_phone === 'string' && check.payload.customer_phone) ||
     (typeof check.payload?.debt_customer_phone === 'string' && check.payload.debt_customer_phone) ||
     live.customer_phone ||
     null;

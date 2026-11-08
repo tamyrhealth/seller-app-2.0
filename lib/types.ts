@@ -72,5 +72,8 @@ export type Order = {
   debt_customer_name?: string | null;
   debt_customer_phone?: string | null;
   debt_note?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  customer_phone_canon?: string | null;
   order_items?: OrderItem[];
 };

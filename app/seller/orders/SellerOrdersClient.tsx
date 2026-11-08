@@ -13,6 +13,7 @@ import { useEnsureActiveDevice } from '@/lib/useEnsureActiveDevice';
 import { displayOrderNumber } from '@/lib/orderNumber';
 import { runExclusive } from '@/lib/exclusiveAsync';
 import { useUserUiState } from '@/lib/useUserUiState';
+import { orderCustomerDisplay } from '@/lib/orderCustomer';
 
 type OrderItemRow = {
   id?: string;
@@ -36,6 +37,10 @@ type OrderRow = {
   is_debt?: boolean;
   debt_status?: string;
   debt_payment_method?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  debt_customer_name?: string | null;
+  debt_customer_phone?: string | null;
   order_items?: OrderItemRow[] | null;
 };
 
@@ -151,6 +156,7 @@ export default function SellerOrdersClient() {
         .select(
           `
           id, order_number, created_at, payment_type, total_sum, status, is_preorder, preorder_status, is_debt, debt_status, debt_payment_method,
+          customer_name, customer_phone, debt_customer_name, debt_customer_phone,
           order_items:order_items ( qty, price, line_sum, is_gift, product_name_snapshot, product:products ( name ) )
         `
         )
@@ -359,6 +365,7 @@ export default function SellerOrdersClient() {
                         </span>
                       </div>
                     )}
+                    <div className="mb-2 text-sm text-gray-900">{t('common.client')}: {orderCustomerDisplay(orderDetail)}</div>
                     <div className="mb-2 text-sm text-gray-900">{t('common.amountLabel')}: {formatMoney(orderDetail.total_sum ?? 0)} ₸</div>
                     <div className="mb-4 text-sm text-gray-900">
                       {t('common.payment')}:{' '}

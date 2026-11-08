@@ -17,6 +17,7 @@ const PII_KEYS = new Set([
   'comment',
   'phone',
   'customer_phone',
+  'customer_phone_canon',
   'customer_name',
   'email',
 ]);
