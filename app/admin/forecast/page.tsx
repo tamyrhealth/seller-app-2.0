@@ -60,6 +60,19 @@ function KpiCard({
   );
 }
 
+const forecastNameHead =
+  'min-w-[12rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left md:sticky md:left-0 md:z-10';
+const forecastNameCell =
+  'min-w-[12rem] whitespace-nowrap border-b border-slate-100 bg-white px-3 py-2.5 font-medium text-slate-900 md:sticky md:left-0 md:z-10';
+const forecastCityCol = 'min-w-[7.5rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left';
+const forecastCityCell = 'min-w-[7.5rem] whitespace-nowrap border-b border-slate-100 px-3 py-2.5';
+const forecastNumHead = 'min-w-[6rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right';
+const forecastWideHead = 'min-w-[7rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right';
+const forecastTextHead = 'min-w-[7rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left';
+const forecastNumCell = 'min-w-[6rem] whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums';
+const forecastWideCell = 'min-w-[7rem] whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right';
+const forecastTextCell = 'min-w-[7rem] whitespace-nowrap border-b border-slate-100 px-3 py-2.5';
+
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -376,26 +389,22 @@ export default function AdminForecastPage() {
                 {!recOk || transferRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{recOk ? t('forecast.noTransfers') : t('forecast.recsHidden')}</p>
                 ) : (
-                  <TableScroll minWidth="52rem" stickyFirst>
+                  <TableScroll minWidth="52rem">
                     <table className="border-separate border-spacing-0 text-sm">
                       <thead>
                         <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          <th className="sticky left-0 z-10 whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">
-                            {t('common.product')}
-                          </th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">{t('forecast.fromCity')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">{t('forecast.toCity')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.qty')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.senderAfter')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.receiverCover')}</th>
+                          <th className={forecastNameHead}>{t('common.product')}</th>
+                          <th className={forecastCityCol}>{t('forecast.fromCity')}</th>
+                          <th className={forecastCityCol}>{t('forecast.toCity')}</th>
+                          <th className={forecastNumHead}>{t('forecast.qty')}</th>
+                          <th className={forecastWideHead}>{t('forecast.senderAfter')}</th>
+                          <th className={forecastWideHead}>{t('forecast.receiverCover')}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {transferRows.map((row, idx) => (
                           <tr key={`${row.productId}-${row.fromCityId}-${row.toCityId}-${idx}`} className="hover:bg-slate-50">
-                            <td className="sticky left-0 z-10 min-w-[10rem] border-b border-slate-100 bg-white px-3 py-2.5 font-medium text-slate-900">
-                              {row.name}
-                            </td>
+                            <td className={forecastNameCell}>{row.name}</td>
                             <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5">{row.fromCityName}</td>
                             <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5">{row.toCityName}</td>
                             <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
@@ -419,66 +428,62 @@ export default function AdminForecastPage() {
                 {tableRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('forecast.empty')}</p>
                 ) : (
-                  <TableScroll minWidth="72rem" stickyFirst>
+                  <TableScroll minWidth="90rem">
                     <table className="border-separate border-spacing-0 text-sm">
                       <thead>
                         <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          <th className="sticky left-0 z-10 min-w-[11rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">
-                            {t('common.product')}
-                          </th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">{t('common.city')}</th>
+                          <th className={forecastNameHead}>{t('common.product')}</th>
+                          <th className={forecastCityCol}>{t('common.city')}</th>
                           <th
-                            className={`whitespace-nowrap border-b px-3 py-3 text-right ${
+                            className={`min-w-[6rem] whitespace-nowrap border-b px-3 py-3 text-right ${
                               windowDays === 7 ? 'border-slate-900 bg-slate-100 text-slate-800' : 'border-slate-200 bg-white'
                             }`}
                           >
                             {t('forecast.q7')}
                           </th>
                           <th
-                            className={`whitespace-nowrap border-b px-3 py-3 text-right ${
+                            className={`min-w-[6rem] whitespace-nowrap border-b px-3 py-3 text-right ${
                               windowDays === 30 ? 'border-slate-900 bg-slate-100 text-slate-800' : 'border-slate-200 bg-white'
                             }`}
                           >
                             {t('forecast.q30')}
                           </th>
                           <th
-                            className={`whitespace-nowrap border-b px-3 py-3 text-right ${
+                            className={`min-w-[6rem] whitespace-nowrap border-b px-3 py-3 text-right ${
                               windowDays === 90 ? 'border-slate-900 bg-slate-100 text-slate-800' : 'border-slate-200 bg-white'
                             }`}
                           >
                             {t('forecast.q90')}
                           </th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.rate')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.onHand')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.reserve')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.available')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.inbound')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.cover')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.exhaust')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-right">{t('forecast.buy')}</th>
-                          <th className="whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">{t('forecast.confidence')}</th>
+                          <th className={forecastWideHead}>{t('forecast.rate')}</th>
+                          <th className={forecastNumHead}>{t('forecast.onHand')}</th>
+                          <th className={forecastNumHead}>{t('forecast.reserve')}</th>
+                          <th className={forecastWideHead}>{t('forecast.available')}</th>
+                          <th className={forecastNumHead}>{t('forecast.inbound')}</th>
+                          <th className={forecastWideHead}>{t('forecast.cover')}</th>
+                          <th className={forecastWideHead}>{t('forecast.exhaust')}</th>
+                          <th className={forecastNumHead}>{t('forecast.buy')}</th>
+                          <th className={forecastTextHead}>{t('forecast.confidence')}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {tableRows.map((row) => {
                           const qtyCell = (active: boolean) =>
-                            `whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums ${
-                              active ? 'bg-slate-50 font-medium text-slate-900' : ''
-                            }`;
+                            `${forecastNumCell} ${active ? 'bg-slate-50 font-medium text-slate-900' : ''}`;
                           return (
                             <tr key={`${row.productId}-${row.cityId}`} className="hover:bg-slate-50">
-                              <td className="sticky left-0 z-10 min-w-[11rem] max-w-[16rem] border-b border-slate-100 bg-white px-3 py-2.5 font-medium text-slate-900">
+                              <td className={forecastNameCell}>
                                 <div>{row.name}</div>
                                 {row.spike ? <div className="mt-0.5 text-xs font-normal text-amber-700">{t('forecast.spike')}</div> : null}
                                 {row.negativeStock ? (
                                   <div className="mt-0.5 text-xs font-normal text-rose-700">{t('forecast.negativeTag')}</div>
                                 ) : null}
                               </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5">{row.cityName}</td>
+                              <td className={forecastCityCell}>{row.cityName}</td>
                               <td className={qtyCell(windowDays === 7)}>{formatForecastQty(row.qty7, row.unit, kpiOk)}</td>
                               <td className={qtyCell(windowDays === 30)}>{formatForecastQty(row.qty30, row.unit, kpiOk)}</td>
                               <td className={qtyCell(windowDays === 90)}>{formatForecastQty(row.qty90, row.unit, kpiOk)}</td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right">
+                              <td className={forecastWideCell}>
                                 <div className="tabular-nums text-slate-900">{formatForecastRate(row.recRate, kpiOk)}</div>
                                 <div
                                   className={`text-[11px] leading-tight ${
@@ -488,28 +493,16 @@ export default function AdminForecastPage() {
                                   {forecastRateWindowLabel(row.recRateWindow, t)}
                                 </div>
                               </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
-                                {formatForecastQty(row.onHand, row.unit)}
-                              </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
-                                {formatForecastQty(row.reserve, row.unit)}
-                              </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
-                                {formatForecastQty(row.available, row.unit)}
-                              </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
-                                {formatForecastQty(row.inbound, row.unit)}
-                              </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
-                                {formatForecastDays(row.daysCover, kpiOk)}
-                              </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
-                                {formatForecastDate(row.exhaustYmd, kpiOk)}
-                              </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5 text-right tabular-nums">
+                              <td className={forecastNumCell}>{formatForecastQty(row.onHand, row.unit)}</td>
+                              <td className={forecastNumCell}>{formatForecastQty(row.reserve, row.unit)}</td>
+                              <td className={forecastNumCell}>{formatForecastQty(row.available, row.unit)}</td>
+                              <td className={forecastNumCell}>{formatForecastQty(row.inbound, row.unit)}</td>
+                              <td className={forecastNumCell}>{formatForecastDays(row.daysCover, kpiOk)}</td>
+                              <td className={forecastNumCell}>{formatForecastDate(row.exhaustYmd, kpiOk)}</td>
+                              <td className={forecastNumCell}>
                                 {recOk ? formatForecastQty(row.cityDeficit ?? 0, row.unit, true) : '—'}
                               </td>
-                              <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2.5">{forecastConfidenceLabel(row.confidence, t)}</td>
+                              <td className={forecastTextCell}>{forecastConfidenceLabel(row.confidence, t)}</td>
                             </tr>
                           );
                         })}

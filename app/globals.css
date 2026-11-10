@@ -66,10 +66,12 @@ body {
 }
 
 .table-scroll-x {
+  width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   max-width: 100%;
 }
 
