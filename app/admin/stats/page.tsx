@@ -19,6 +19,16 @@ import {
 } from '@/lib/adminStats';
 import { downloadAdminStatsExcel } from '@/lib/adminStatsExport';
 import { fetchRecognizedWindow, fetchUnpaidDebts } from '@/lib/fetchAdminStatsOrders';
+import { SELLER_BALANCES_LIST } from '@/lib/sellerCommission';
+import {
+  STATS_SELLER_EARNINGS_RPC,
+  buildSellerRanking,
+  commissionScopeAllowed,
+  parseSellerBalances,
+  parseSellerEarnings,
+  statsEarningsRpcMissing,
+  type StatsEarningsStatus,
+} from '@/lib/adminStatsEarnings';
 import { useAuth } from '@/lib/auth';
 import { readUserUi, writeUserUi } from '@/lib/uiStorage';
 import {
@@ -90,10 +100,14 @@ export default function AdminStatsPage() {
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedTop, setExpandedTop] = useState<string | null>(null);
   const [sellerSort, setSellerSort] = useState<SellerSort>('revenue');
   const [productSort, setProductSort] = useState<ProductSort>('qty');
   const [topMode, setTopMode] = useState<'qty' | 'revenue'>('qty');
   const [filtersReady, setFiltersReady] = useState(false);
+  const [earningsStatus, setEarningsStatus] = useState<StatsEarningsStatus>('skipped');
+  const [earnings, setEarnings] = useState<ReturnType<typeof parseSellerEarnings>>(new Map());
+  const [balances, setBalances] = useState<ReturnType<typeof parseSellerBalances>>(new Map());
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -146,6 +160,9 @@ export default function AdminStatsPage() {
     setPeriod(spec);
     if (!spec) {
       setStats(null);
+      setEarnings(new Map());
+      setBalances(new Map());
+      setEarningsStatus('skipped');
       setLoading(false);
       setError(preset === 'custom' ? t('admin.dateRangeInvalid') : null);
       return;
@@ -154,7 +171,12 @@ export default function AdminStatsPage() {
     setLoading(true);
     setError(null);
     (async () => {
-      const [rev, debts] = await Promise.all([fetchRecognizedWindow(spec.range), fetchUnpaidDebts()]);
+      const [rev, debts, earnRes, balRes] = await Promise.all([
+        fetchRecognizedWindow(spec.range),
+        fetchUnpaidDebts(),
+        supabase.rpc(STATS_SELLER_EARNINGS_RPC, { p_from: spec.fromYmd, p_to: spec.toYmd }),
+        supabase.rpc(SELLER_BALANCES_LIST),
+      ]);
       if (cancelled) return;
       if (rev.error) {
         setError(rev.error);
@@ -162,6 +184,15 @@ export default function AdminStatsPage() {
         setLoading(false);
         return;
       }
+      if (earnRes.error) {
+        setEarnings(new Map());
+        setEarningsStatus(statsEarningsRpcMissing(earnRes.error.message) ? 'missing' : 'error');
+      } else {
+        setEarnings(parseSellerEarnings(earnRes.data));
+        setEarningsStatus('connected');
+      }
+      if (balRes.error) setBalances(new Map());
+      else setBalances(parseSellerBalances(balRes.data));
       setTruncated(rev.truncated || debts.truncated);
       setStats(
         buildAdminStats({
@@ -195,6 +226,18 @@ export default function AdminStatsPage() {
       name: p.name.length > 18 ? `${p.name.slice(0, 18)}…` : p.name,
       value: topMode === 'qty' ? p.qty : Math.round(p.revenue),
     }));
+
+  const commissionAllowed = commissionScopeAllowed(cityId, productId);
+  const topSellers = stats
+    ? buildSellerRanking({
+        sellers: stats.sellers,
+        earnings,
+        balances,
+        commissionAllowed,
+        earningsStatus,
+        limit: 5,
+      })
+    : [];
 
   const sortedSellers = [...(stats?.sellers || [])].sort((a, b) => {
     if (sellerSort === 'orders') return b.orderCount - a.orderCount;
@@ -333,6 +376,117 @@ export default function AdminStatsPage() {
               {stats.orderCount === 0 && (
                 <p className="text-gray-600 mb-6">{t('stats.emptyPeriod')}</p>
               )}
+
+              <section className="mb-6 border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+                  <h2 className="font-bold text-gray-900 text-sm">{t('stats.topSellers')}</h2>
+                  <p className="text-xs text-gray-600 mt-1">{t('stats.topSellersHint')}</p>
+                </div>
+                <div className="px-3 py-2 space-y-1">
+                  {!commissionAllowed && (
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                      {t('stats.earningsCityScope')}
+                    </p>
+                  )}
+                  {commissionAllowed && earningsStatus === 'missing' && (
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                      {t('stats.earningsRpcMissing')}
+                    </p>
+                  )}
+                  {commissionAllowed && earningsStatus === 'error' && (
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                      {t('stats.earningsRpcError')}
+                    </p>
+                  )}
+                  {commissionAllowed && earningsStatus === 'connected' && (
+                    <p className="text-xs text-gray-500">{t('stats.commissionDateNote')}</p>
+                  )}
+                  {topSellers.length === 0 ? (
+                    <p className="text-sm text-gray-600 py-2">{t('stats.emptyPeriod')}</p>
+                  ) : (
+                    topSellers.map((s) => {
+                      const open = expandedTop === s.key;
+                      return (
+                        <div key={`top-${s.key}`} className="border border-gray-100 rounded-lg">
+                          <button
+                            type="button"
+                            className="w-full text-left px-2.5 py-2 hover:bg-gray-50"
+                            onClick={() => setExpandedTop((c) => (c === s.key ? null : s.key))}
+                            aria-expanded={open}
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-gray-900 break-words">
+                                <span className="tabular-nums text-gray-500 mr-1">{s.place}.</span>
+                                {s.name}
+                              </p>
+                              <p className="text-[11px] text-gray-500 mt-0.5">
+                                {open ? t('stats.collapseSeller') : t('stats.expandSeller')}
+                              </p>
+                              <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs tabular-nums">
+                                <span className="text-gray-500">{t('stats.revenue')}</span>
+                                <span className="text-right font-semibold text-gray-900">{formatMoney(s.revenue)} ₸</span>
+                                <span className="text-gray-500">{t('stats.soldQty')}</span>
+                                <span className="text-right text-gray-700">{formatQtyByUnit(s.qtyByUnit)}</span>
+                                <span className={s.incomplete ? 'text-amber-800' : 'text-gray-500'}>{t('stats.earned')}</span>
+                                <span className={`text-right ${s.incomplete ? 'text-amber-800' : 'text-gray-800'}`}>
+                                  {s.earnedKnown && s.earned != null
+                                    ? `${formatMoney(s.earned)} ₸`
+                                    : t('finance.unavailable')}
+                                </span>
+                                {s.payable != null && (
+                                  <>
+                                    <span className="text-gray-500">{t('stats.payableNow')}</span>
+                                    <span className="text-right text-gray-600">
+                                      {formatMoney(s.payable)} ₸
+                                      <span className="block text-[10px] font-normal normal-case tracking-normal">
+                                        {t('stats.payableHintShort')}
+                                      </span>
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </button>
+                          {s.incomplete && (
+                            <p className="px-2.5 pb-2 text-[11px] text-amber-800">{t('stats.earningsIncomplete')}</p>
+                          )}
+                          {open && (
+                            <div className="px-2.5 pb-2.5 border-t border-gray-100 pt-2 space-y-1">
+                              {s.products.length === 0 ? (
+                                <p className="text-xs text-gray-500">{t('admin.noSoldItems')}</p>
+                              ) : (
+                                s.products.map((p) => (
+                                  <div key={p.key} className="flex flex-wrap justify-between gap-x-2 gap-y-0.5 text-xs text-gray-800">
+                                    <span className="min-w-0 max-w-full break-words">
+                                      {p.name}
+                                      {p.unit && p.unit !== 'pcs' ? ` (${p.unit})` : ''}
+                                    </span>
+                                    <span className="min-w-0 tabular-nums text-right">
+                                      {formatQtyValue(p.qty, p.unit)} · {formatMoney(p.revenue)} ₸
+                                      {p.commissionKnown && p.commission != null
+                                        ? ` · ${formatMoney(p.commission)} ₸`
+                                        : commissionAllowed
+                                          ? ` · ${t('finance.unavailable')}`
+                                          : ''}
+                                    </span>
+                                  </div>
+                                ))
+                              )}
+                              <div className="flex justify-between gap-2 text-xs font-semibold text-gray-900 pt-1 border-t border-gray-100">
+                                <span>{t('stats.sellerTotals')}</span>
+                                <span className="tabular-nums text-right">
+                                  {formatMoney(s.revenue)} ₸ · {formatQtyByUnit(s.qtyByUnit)}
+                                  {s.earnedKnown && s.earned != null ? ` · ${formatMoney(s.earned)} ₸` : ''}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
                 <ChartCard title={t('stats.sellerShare')}>

@@ -61,16 +61,21 @@ export type SellerProductRow = {
   unit: string;
   qty: number;
   revenue: number;
+  productId: string;
+  saleItemIds: string[];
 };
 
 export type SellerStatRow = {
   key: string;
   name: string;
+  sellerId: string | null;
   revenue: number;
   orderCount: number;
+  unitsSold: number;
   qtyByUnit: QtyByUnit[];
   sharePct: number;
   products: SellerProductRow[];
+  saleItemIds: string[];
 };
 
 export type DebtSellerRow = {
@@ -417,10 +422,13 @@ export function buildAdminStats(params: {
 
   type SellerAcc = {
     name: string;
+    sellerId: string | null;
     revenue: number;
     orderCount: number;
+    unitsSold: number;
     qty: Map<string, number>;
     products: Map<string, SellerProductRow>;
+    saleItemIds: string[];
   };
   const sellerMap = new Map<string, SellerAcc>();
   const productMap = new Map<string, ProductStatRow>();
@@ -461,7 +469,16 @@ export function buildAdminStats(params: {
     const sl = sellerLabel(o.seller_id, sellerNames, deletedSellerLabel);
     let bucket = sellerMap.get(sl.key);
     if (!bucket) {
-      bucket = { name: sl.name, revenue: 0, orderCount: 0, qty: new Map(), products: new Map() };
+      bucket = {
+        name: sl.name,
+        sellerId: o.seller_id || null,
+        revenue: 0,
+        orderCount: 0,
+        unitsSold: 0,
+        qty: new Map(),
+        products: new Map(),
+        saleItemIds: [],
+      };
       sellerMap.set(sl.key, bucket);
     }
     bucket.revenue += orderRevenue;
@@ -471,11 +488,15 @@ export function buildAdminStats(params: {
       if (!line.qty && !line.revenue) continue;
       addQty(qtyAll, line.meta.unit, line.qty);
       addQty(bucket.qty, line.meta.unit, line.qty);
+      bucket.unitsSold += line.qty;
+      const itemId = line.item.id ? String(line.item.id) : '';
+      if (itemId) bucket.saleItemIds.push(itemId);
       const pkey = `${line.meta.productId}::${line.meta.unit}`;
       const sp = bucket.products.get(pkey);
       if (sp) {
         sp.qty += line.qty;
         sp.revenue += line.revenue;
+        if (itemId) sp.saleItemIds.push(itemId);
       } else {
         bucket.products.set(pkey, {
           key: pkey,
@@ -483,6 +504,8 @@ export function buildAdminStats(params: {
           unit: line.meta.unit,
           qty: line.qty,
           revenue: line.revenue,
+          productId: line.meta.productId,
+          saleItemIds: itemId ? [itemId] : [],
         });
       }
       const pr = productMap.get(pkey);
@@ -505,11 +528,14 @@ export function buildAdminStats(params: {
     .map(([key, v]) => ({
       key,
       name: v.name,
+      sellerId: v.sellerId,
       revenue: v.revenue,
       orderCount: v.orderCount,
+      unitsSold: v.unitsSold,
       qtyByUnit: qtyList(v.qty),
       sharePct: revenue > 0 ? (v.revenue / revenue) * 100 : 0,
       products: [...v.products.values()].sort((a, b) => b.revenue - a.revenue || b.qty - a.qty),
+      saleItemIds: v.saleItemIds,
     }))
     .sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name, 'ru'));
 
