@@ -4,8 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { useTranslation } from '@/lib/i18n';
-import { checkActiveDevice, type DeviceAccess } from '@/lib/activeSession';
-import { getOrCreateDeviceId } from '@/lib/deviceId';
+import { checkActiveDevice, claimActiveAuthSession, revokeOtherAuthSessions, type DeviceAccess } from '@/lib/activeSession';
 import { homePathForRole, roleMatches } from '@/lib/roles';
 import type { Role } from '@/lib/types';
 
@@ -39,8 +38,7 @@ export default function Protected({ children, role }: ProtectedProps) {
 
   const runDeviceCheck = useCallback(async () => {
     if (!session?.user?.id) return;
-    const deviceId = getOrCreateDeviceId();
-    const status = await checkActiveDevice(session.user.id, deviceId);
+    const status = await checkActiveDevice(session.user.id);
     if (status === 'allowed') {
       setDeviceAccess('allowed');
       return;
@@ -135,7 +133,16 @@ export default function Protected({ children, role }: ProtectedProps) {
           type="button"
           className="px-6 py-2 rounded-lg bg-blue-600 text-white font-medium min-h-11"
           onClick={() => {
-            setDeviceAccess('pending');
+            void claimActiveAuthSession().then((claimed) => {
+              if (claimed === 'denied') {
+                void signOut(t('auth.deviceConflict'));
+                return;
+              }
+              if (claimed === 'allowed') {
+                void revokeOtherAuthSessions();
+              }
+              setDeviceAccess('pending');
+            });
           }}
         >
           {t('auth.deviceCheckRetry')}

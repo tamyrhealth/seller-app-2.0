@@ -4,7 +4,6 @@ import { useCallback } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useTranslation } from '@/lib/i18n';
 import { checkActiveDevice } from '@/lib/activeSession';
-import { getOrCreateDeviceId } from '@/lib/deviceId';
 
 /**
  * Хук для проверки активного устройства перед критичными действиями.
@@ -17,13 +16,8 @@ export function useEnsureActiveDevice() {
 
   return useCallback(async (): Promise<boolean> => {
     const userId = session?.user?.id;
-    const deviceId = getOrCreateDeviceId();
     if (!userId) return false;
-    if (!deviceId) {
-      if (typeof window !== 'undefined') window.alert(t('auth.deviceCheckUnknown'));
-      return false;
-    }
-    const status = await checkActiveDevice(userId, deviceId);
+    const status = await checkActiveDevice(userId);
     if (status === 'allowed') return true;
     if (status === 'denied') {
       await signOut(t('auth.deviceConflict'));

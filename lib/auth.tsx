@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import type { Profile } from '@/lib/types';
-import { syncActiveSession } from '@/lib/activeSession';
-import { getOrCreateDeviceId } from '@/lib/deviceId';
+import { claimActiveAuthSession, revokeOtherAuthSessions } from '@/lib/activeSession';
 import { clearAllUserUi } from '@/lib/uiStorage';
 
 const DEV = process.env.NODE_ENV === 'development';
@@ -94,8 +93,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       applyProfile(p);
       if (DEV) console.log('[auth] profile loaded', !!p);
       if (p?.is_active !== false) {
-        const deviceId = getOrCreateDeviceId();
-        if (deviceId) void syncActiveSession(u.id, deviceId);
+        const claimed = await claimActiveAuthSession();
+        if (claimed === 'allowed') {
+          void revokeOtherAuthSessions();
+        } else if (claimed === 'denied') {
+          await supabase.auth.signOut({ scope: 'local' });
+          applyProfile(null);
+          applySession(null);
+          router.push(`/auth/sign-in?msg=${encodeURIComponent('Аккаунт открыт на другом устройстве')}`);
+          return;
+        }
+        /* unknown / missing RPC / network: keep session, do not signOut others */
       }
     } catch (err) {
       if (DEV) console.log('[auth] refreshProfile error', err);

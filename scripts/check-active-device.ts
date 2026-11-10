@@ -62,6 +62,9 @@ if (session.includes('при ошибке не блокируем')) fail('fail-
 if (/if \(error \|\| !data\) return true/.test(session)) fail('fail-open return true must be gone');
 if (!session.includes("return 'unknown'")) fail('unknown status');
 if (!session.includes('interpretActiveDeviceQuery')) fail('pure interpreter');
+if (!session.includes("rpc('check_active_auth_session')")) fail('server session check');
+if (!session.includes("rpc('claim_active_auth_session')")) fail('server session claim');
+if (session.includes(".from('user_active_sessions')")) fail('device_id table must not authorize');
 const access = read('lib/deviceAccess.ts');
 if (!access.includes("return 'unknown'")) fail('interpreter unknown');
 
