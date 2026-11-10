@@ -6,6 +6,8 @@ export const SELLER_TARIFF_ASSIGN = 'admin_seller_tariff_assign';
 export const SELLER_RATE_OVERRIDES_LIST = 'admin_seller_rate_overrides_list';
 export const SELLER_RATE_OVERRIDE_SET = 'admin_seller_rate_override_set';
 export const SELLER_MISSING_ACCRUALS_LIST = 'admin_seller_missing_accruals_list';
+export const SELLER_UNACCRUED_ITEMS_LIST = 'admin_seller_unaccrued_items_list';
+export const SELLER_ACCRUAL_CONSISTENCY = 'admin_seller_accrual_consistency_summary';
 export const SELLER_ACCRUAL_RETRY_ITEM = 'admin_seller_accrual_retry_item';
 export const SELLER_BALANCE = 'admin_seller_balance';
 export const SELLER_BALANCES_LIST = 'admin_seller_balances_list';
@@ -98,6 +100,34 @@ export type SellerGoodsIssue = {
   items: SellerGoodsIssueItem[];
 };
 
+export type UnaccruedCommissionItem = {
+  order_item_id: string;
+  order_id: string;
+  order_number: string | null;
+  seller_id: string;
+  seller_name: string | null;
+  product_id: string;
+  product_name: string | null;
+  qty: number;
+  sale_at: string | null;
+  reason: 'hook_skip' | 'no_tariff_at_sale' | string;
+  retryable: boolean;
+  status: string;
+};
+
+export type AccrualConsistencySummary = {
+  eligibleSaleLines: number;
+  accrued: number;
+  missingRate: number;
+  reversed: number;
+  unaccruedHookSkip: number;
+  unaccruedNoTariff: number;
+  unaccruedBackdated: number;
+  gifts: number;
+  pendingPreorders: number;
+  canceledWithoutAccrual: number;
+};
+
 export type SellerLedgerEntry = {
   id: string;
   seller_id: string;
@@ -139,6 +169,48 @@ export function openAssignment(rows: TariffAssignmentRow[]): TariffAssignmentRow
 export function formatTariffAmount(value: number | null | undefined, unset: string) {
   if (value == null) return unset;
   return `${new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 2 }).format(value)} ₸`;
+}
+
+export function asUnaccruedItems(payload: unknown): UnaccruedCommissionItem[] {
+  return rpcItems<Record<string, unknown>>(payload)
+    .map((row) => {
+      if (typeof row.order_item_id !== 'string' || !row.order_item_id) return null;
+      if (typeof row.order_id !== 'string' || !row.order_id) return null;
+      if (typeof row.seller_id !== 'string' || !row.seller_id) return null;
+      const qty = asFiniteNumber(row.qty);
+      return {
+        order_item_id: row.order_item_id,
+        order_id: row.order_id,
+        order_number: typeof row.order_number === 'string' ? row.order_number : null,
+        seller_id: row.seller_id,
+        seller_name: typeof row.seller_name === 'string' ? row.seller_name : null,
+        product_id: typeof row.product_id === 'string' ? row.product_id : '',
+        product_name: typeof row.product_name === 'string' ? row.product_name : null,
+        qty,
+        sale_at: typeof row.sale_at === 'string' ? row.sale_at : null,
+        reason: typeof row.reason === 'string' ? row.reason : 'hook_skip',
+        retryable: row.retryable === true,
+        status: typeof row.status === 'string' ? row.status : 'unaccrued',
+      } satisfies UnaccruedCommissionItem;
+    })
+    .filter((row): row is UnaccruedCommissionItem => row != null);
+}
+
+export function asAccrualConsistency(payload: unknown): AccrualConsistencySummary | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const row = payload as Record<string, unknown>;
+  return {
+    eligibleSaleLines: asFiniteNumber(row.eligible_sale_lines),
+    accrued: asFiniteNumber(row.accrued),
+    missingRate: asFiniteNumber(row.missing_rate),
+    reversed: asFiniteNumber(row.reversed),
+    unaccruedHookSkip: asFiniteNumber(row.unaccrued_hook_skip),
+    unaccruedNoTariff: asFiniteNumber(row.unaccrued_no_tariff),
+    unaccruedBackdated: asFiniteNumber(row.unaccrued_backdated),
+    gifts: asFiniteNumber(row.gifts),
+    pendingPreorders: asFiniteNumber(row.pending_preorders),
+    canceledWithoutAccrual: asFiniteNumber(row.canceled_without_accrual),
+  };
 }
 
 export function rpcItems<T>(payload: unknown): T[] {

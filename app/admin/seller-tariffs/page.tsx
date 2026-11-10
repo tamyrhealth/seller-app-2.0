@@ -20,16 +20,22 @@ import {
   SELLER_TARIFF_RATES_LIST,
   SELLER_TARIFF_RATE_SET,
   SELLER_MISSING_ACCRUALS_LIST,
+  SELLER_UNACCRUED_ITEMS_LIST,
+  SELLER_ACCRUAL_CONSISTENCY,
   SELLER_ACCRUAL_RETRY_ITEM,
   formatTariffAmount,
   openAssignment,
   openRate,
   parseTariffAmount,
   rpcItems,
+  asUnaccruedItems,
+  asAccrualConsistency,
+  type AccrualConsistencySummary,
   type RateOverrideRow,
   type TariffAssignmentRow,
   type TariffPlan,
   type TariffRateRow,
+  type UnaccruedCommissionItem,
 } from '@/lib/sellerCommission';
 
 const SAVE_KEY = 'seller-tariffs-save';
@@ -58,18 +64,26 @@ export default function AdminSellerTariffsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [messageKind, setMessageKind] = useState<'ok' | 'error' | ''>('');
+  const [retryBusy, setRetryBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [missingRows, setMissingRows] = useState<Array<Record<string, unknown>>>([]);
+  const [unaccruedRows, setUnaccruedRows] = useState<UnaccruedCommissionItem[]>([]);
+  const [consistency, setConsistency] = useState<AccrualConsistencySummary | null>(null);
   const [retryItemId, setRetryItemId] = useState('');
   const [showHistory, setShowHistory] = useState(false);
 
-  const load = useCallback(async () => {
-    setMessage('');
+  const load = useCallback(async (opts?: { preserveMessage?: boolean }) => {
+    if (!opts?.preserveMessage) {
+      setMessage('');
+      setMessageKind('');
+    }
     const { data: planPayload, error: planErr } = await supabase.rpc(SELLER_TARIFF_PLANS_LIST);
     if (planErr) {
+      setMessageKind('error');
       setMessage(planErr.message);
       setLoading(false);
-      return;
+      return planErr.message;
     }
     const nextPlans = rpcItems<TariffPlan>(planPayload);
     setPlans(nextPlans);
@@ -80,9 +94,10 @@ export default function AdminSellerTariffsPage() {
       .select(PRODUCT_CATALOG_SELECT)
       .order('name');
     if (productErr) {
+      setMessageKind('error');
       setMessage(productErr.message);
       setLoading(false);
-      return;
+      return productErr.message;
     }
     setProducts((productsData || []) as Product[]);
     const { data: sellerRows, error: sellerErr } = await supabase
@@ -91,9 +106,10 @@ export default function AdminSellerTariffsPage() {
       .eq('role', 'seller')
       .order('display_name');
     if (sellerErr) {
+      setMessageKind('error');
       setMessage(sellerErr.message);
       setLoading(false);
-      return;
+      return sellerErr.message;
     }
     const nextSellers = (sellerRows || []) as Profile[];
     setSellers(nextSellers);
@@ -114,9 +130,25 @@ export default function AdminSellerTariffsPage() {
     setSellerId((prev) => prev || nextSellers[0]?.id || '');
     setDraftA({});
     setDraftB({});
-    const { data: missingPayload } = await supabase.rpc(SELLER_MISSING_ACCRUALS_LIST, { p_limit: 100 });
+    const { data: missingPayload, error: missingErr } = await supabase.rpc(SELLER_MISSING_ACCRUALS_LIST, {
+      p_limit: 100,
+    });
     setMissingRows(rpcItems<Record<string, unknown>>(missingPayload));
+    const { data: unaccruedPayload, error: unaccruedErr } = await supabase.rpc(SELLER_UNACCRUED_ITEMS_LIST, {
+      p_limit: 100,
+    });
+    setUnaccruedRows(asUnaccruedItems(unaccruedPayload));
+    const { data: consistencyPayload, error: consistencyErr } = await supabase.rpc(SELLER_ACCRUAL_CONSISTENCY);
+    setConsistency(asAccrualConsistency(consistencyPayload));
+    const loadErr = missingErr || unaccruedErr || consistencyErr;
+    if (loadErr) {
+      setMessageKind('error');
+      setMessage(loadErr.message);
+      setLoading(false);
+      return loadErr.message;
+    }
     setLoading(false);
+    return null;
   }, []);
 
   useEffect(() => {
@@ -217,14 +249,30 @@ export default function AdminSellerTariffsPage() {
     }
   }
 
-  async function retryItem() {
-    if (!isAdmin || !retryItemId.trim()) return;
-    const { error } = await supabase.rpc(SELLER_ACCRUAL_RETRY_ITEM, { p_order_item_id: retryItemId.trim() });
-    setMessage(error ? error.message : t('sellerTariffs.saved'));
-    if (!error) {
+  async function retryItem(orderItemId?: string) {
+    const id = (orderItemId || retryItemId).trim();
+    if (!isAdmin || !id || retryBusy) return;
+    if (!window.confirm(t('sellerTariffs.retryConfirm'))) return;
+    setRetryBusy(true);
+    await runExclusive('seller-tariffs-retry', async () => {
+      const { data, error } = await supabase.rpc(SELLER_ACCRUAL_RETRY_ITEM, { p_order_item_id: id });
+      if (error) {
+        setMessageKind('error');
+        setMessage(error.message);
+        return;
+      }
+      if (!data) {
+        setMessageKind('error');
+        setMessage(t('sellerTariffs.retryFailed'));
+        return;
+      }
       setRetryItemId('');
-      await load();
-    }
+      const reloadErr = await load({ preserveMessage: true });
+      if (reloadErr) return;
+      setMessageKind('ok');
+      setMessage(t('sellerTariffs.retryDone'));
+    });
+    setRetryBusy(false);
   }
 
   return (
@@ -242,7 +290,15 @@ export default function AdminSellerTariffsPage() {
           <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
             {t('sellerTariffs.warn')}
           </p>
-          {message ? <p className="text-sm text-gray-800 mb-3">{message}</p> : null}
+          {message ? (
+            <p
+              className={`text-sm mb-3 ${
+                messageKind === 'error' ? 'text-red-700' : messageKind === 'ok' ? 'text-emerald-800' : 'text-gray-800'
+              }`}
+            >
+              {message}
+            </p>
+          ) : null}
           {loading ? <p className="text-gray-600">{t('sellerTariffs.loading')}</p> : null}
 
           <h2 className="text-lg font-semibold mb-2">{t('sellerTariffs.ratesTitle')}</h2>
@@ -411,6 +467,75 @@ export default function AdminSellerTariffsPage() {
             </table>
           </TableScroll>
 
+          <h2 className="text-lg font-semibold mt-8 mb-2">{t('sellerTariffs.unaccruedTitle')}</h2>
+          <p className="text-sm text-gray-700 mb-3">{t('sellerTariffs.unaccruedHint')}</p>
+          {consistency ? (
+            <p className="text-sm text-gray-800 mb-3">
+              {t('sellerTariffs.unaccruedCount')}: {consistency.unaccruedHookSkip}
+              {' · '}
+              {t('sellerTariffs.noTariffCount')}: {consistency.unaccruedNoTariff}
+              {' · '}
+              {t('sellerTariffs.backdatedCount')}: {consistency.unaccruedBackdated}
+              {' · '}
+              {t('sellerTariffs.missingTitle')}: {consistency.missingRate}
+            </p>
+          ) : null}
+          <TableScroll minWidth="720px">
+            <table className="min-w-[720px] w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="p-2">{t('sellerTariffs.colSeller')}</th>
+                  <th className="p-2">{t('sellerTariffs.colOrder')}</th>
+                  <th className="p-2">{t('sellerTariffs.colProduct')}</th>
+                  <th className="p-2">{t('sellerTariffs.colReason')}</th>
+                  <th className="p-2">{t('sellerTariffs.colFrom')}</th>
+                  <th className="p-2">{t('sellerTariffs.colStatus')}</th>
+                  <th className="p-2">{t('sellerTariffs.retry')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unaccruedRows.length === 0 ? (
+                  <tr>
+                    <td className="p-2 text-gray-600" colSpan={7}>
+                      {t('sellerTariffs.unaccruedEmpty')}
+                    </td>
+                  </tr>
+                ) : (
+                  unaccruedRows.map((row) => (
+                    <tr key={row.order_item_id} className="border-b">
+                      <td className="p-2">{row.seller_name || row.seller_id}</td>
+                      <td className="p-2">{row.order_number || row.order_id}</td>
+                      <td className="p-2">{row.product_name || row.product_id}</td>
+                      <td className="p-2">
+                        {row.reason === 'no_tariff_at_sale'
+                          ? t('sellerTariffs.reasonNoTariff')
+                          : row.reason === 'backdated_tariff'
+                            ? t('sellerTariffs.reasonBackdated')
+                            : t('sellerTariffs.reasonHookSkip')}
+                      </td>
+                      <td className="p-2">{row.sale_at || '—'}</td>
+                      <td className="p-2">{row.status}</td>
+                      <td className="p-2">
+                        {row.retryable ? (
+                          <button
+                            type="button"
+                            className="px-3 py-1 rounded-lg bg-blue-600 text-white disabled:opacity-50 min-h-11"
+                            disabled={!isAdmin || retryBusy}
+                            onClick={() => void retryItem(row.order_item_id)}
+                          >
+                            {t('sellerTariffs.retry')}
+                          </button>
+                        ) : (
+                          t('sellerTariffs.retryBlocked')
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </TableScroll>
+
           <h2 className="text-lg font-semibold mt-8 mb-2">{t('sellerTariffs.missingTitle')}</h2>
           <p className="text-sm text-gray-700 mb-3">{t('sellerTariffs.missingHint')}</p>
           <TableScroll minWidth="640px">
@@ -441,12 +566,12 @@ export default function AdminSellerTariffsPage() {
               placeholder={t('sellerTariffs.retryPlaceholder')}
               value={retryItemId}
               onChange={(e) => setRetryItemId(e.target.value)}
-              disabled={!isAdmin}
+              disabled={!isAdmin || retryBusy}
             />
             <button
               type="button"
               className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50 min-h-11"
-              disabled={!isAdmin}
+              disabled={!isAdmin || retryBusy}
               onClick={() => void retryItem()}
             >
               {t('sellerTariffs.retry')}
