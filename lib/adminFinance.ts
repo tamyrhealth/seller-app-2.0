@@ -3,6 +3,7 @@
  * Выручка — только через lib/accounting.ts.
  * Себестоимость строки: cost_price_snapshot, иначе оценка admin_product_costs().
  * Расходы — журнал admin_finance_expenses_list; закупка партии сюда не подмешивается.
+ * Комиссии — admin_finance_seller_pnl: зачёт выдачи не выручка; выплаты не в P&L.
  */
 
 import {
@@ -20,8 +21,10 @@ export const FINANCE_EXPENSE_CREATE_RPC = 'admin_finance_expense_create' as cons
 export const FINANCE_EXPENSE_UPDATE_RPC = 'admin_finance_expense_update' as const;
 export const FINANCE_EXPENSE_DELETE_RPC = 'admin_finance_expense_delete' as const;
 export const FINANCE_EXPENSE_EVENTS_RPC = 'admin_finance_expense_events' as const;
+export const FINANCE_SELLER_PNL_RPC = 'admin_finance_seller_pnl' as const;
 
 export const FINANCE_CARGO_CUSTOMS_CATEGORY = 'cargo_customs' as const;
+export const FINANCE_SELLER_PAYOUT_CATEGORY = 'seller_payout' as const;
 
 export const FINANCE_EXPENSE_CATEGORIES = [
   'logistics',
@@ -48,7 +51,18 @@ export type FinanceWarningCode =
   | 'expenses_incomplete'
   | 'cargo_customs_held_out_of_net'
   | 'company_expenses_not_allocated_to_cities'
-  | 'zero_revenue';
+  | 'zero_revenue'
+  | 'seller_payout_unclassified'
+  | 'seller_adjustments_unclassified'
+  | 'seller_goods_ledger_mismatch'
+  | 'seller_goods_cogs_incomplete'
+  | 'seller_pnl_unavailable'
+  | 'seller_missing_rate'
+  | 'seller_unpaid_debt_accrual'
+  | 'seller_goods_zero_cost'
+  | 'seller_city_scope';
+
+export type SellerPnlStatus = 'skipped' | 'connected' | 'missing' | 'error';
 
 export type FinanceCogsQuality = 'historical' | 'estimated' | 'mixed' | 'incomplete';
 
@@ -132,11 +146,44 @@ export type FinanceProductRow = {
   estimatedGrossProfit: number | null;
 };
 
+export type SellerFinancePnl = {
+  loaded: boolean;
+  commissionAccrued: number;
+  commissionReversed: number;
+  goodsCogs: number;
+  goodsCredit: number;
+  goodsCogsComplete: boolean;
+  goodsUnknownCostLineCount: number;
+  goodsZeroCostLineCount: number;
+  goodsIssueCount: number;
+  goodsReturnCount: number;
+  goodsAdvanceCredit: number;
+  goodsSettlementCredit: number;
+  ledgerGoodsSigned: number;
+  goodsLedgerDelta: number;
+  goodsLedgerConsistent: boolean;
+  cashPayout: number;
+  cashAdvance: number;
+  liabilityBalanceEnd: number;
+  adjustmentsSigned: number;
+  adjustmentsCount: number;
+  sellerCompensationNet: number;
+  payoutLegacyOpex: number;
+  payoutDuplicate: number;
+  payoutUnclassified: number;
+  payoutUnclassifiedCount: number;
+  cutoverDate: string | null;
+  missingRateCount: number;
+  unpaidDebtAccrued: number;
+};
+
 export type AdminFinanceReport = {
   revenue: number;
+  grossRevenue: number;
   recognizedOrderCount: number;
   averageCheck: number;
   cogsKnown: number;
+  salesCogs: number;
   cogsComplete: boolean;
   missingCostProductCount: number;
   missingCostLineCount: number;
@@ -145,10 +192,37 @@ export type AdminFinanceReport = {
   partialGrossProfit: number;
   expensesByCategory: FinanceCategoryTotal[];
   operatingExpenses: number;
+  otherOperatingExpenses: number;
   cargoCustomsExpenses: number;
   companyWideExpenses: number;
   cityTaggedExpenses: number;
   expensesComplete: boolean;
+  commissionAccrual: number;
+  commissionReversal: number;
+  goodsIssueCogs: number;
+  goodsSettlementCredit: number;
+  sellerCompensationNet: number;
+  sellerLiability: number;
+  cashPayouts: number;
+  cashAdvances: number;
+  sellerPayoutLegacyOpex: number;
+  sellerPayoutDuplicate: number;
+  sellerPayoutUnclassified: number;
+  sellerAdjustmentsSigned: number;
+  sellerAdjustmentsCount: number;
+  goodsAdvanceCredit: number;
+  goodsIssueSettlementCredit: number;
+  goodsIssueCount: number;
+  goodsReturnCount: number;
+  missingRateCount: number;
+  unpaidDebtAccrued: number;
+  goodsZeroCostLineCount: number;
+  sellerPnlStatus: SellerPnlStatus;
+  cityScoped: boolean;
+  goodsLedgerDelta: number;
+  goodsLedgerConsistent: boolean;
+  profitReviewRequired: boolean;
+  computedNetProfit: number | null;
   estimatedNetProfit: number | null;
   preliminaryNetProfit: number | null;
   grossMarginPct: number | null;
@@ -177,6 +251,9 @@ export type BuildAdminFinanceInput = {
   expensesInputComplete?: boolean;
   itemSnapshots?: Map<string, number | null> | null;
   itemSnapshotsUnavailable?: boolean;
+  sellerPnl?: SellerFinancePnl | null;
+  sellerPnlStatus?: SellerPnlStatus;
+  cityScoped?: boolean;
 };
 
 function money(n: number): number {
@@ -284,6 +361,118 @@ export function parseFinanceExpensesList(payload: unknown): FinanceExpenseRow[] 
   return parseJsonbItems<FinanceExpenseRow>(payload);
 }
 
+function jsonNum(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
+}
+
+function jsonInt(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+}
+
+function jsonBool(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  return fallback;
+}
+
+function nested(obj: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = obj[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+export function emptySellerFinancePnl(): SellerFinancePnl {
+  return {
+    loaded: false,
+    commissionAccrued: 0,
+    commissionReversed: 0,
+    goodsCogs: 0,
+    goodsCredit: 0,
+    goodsCogsComplete: true,
+    goodsUnknownCostLineCount: 0,
+    goodsZeroCostLineCount: 0,
+    goodsIssueCount: 0,
+    goodsReturnCount: 0,
+    goodsAdvanceCredit: 0,
+    goodsSettlementCredit: 0,
+    ledgerGoodsSigned: 0,
+    goodsLedgerDelta: 0,
+    goodsLedgerConsistent: true,
+    cashPayout: 0,
+    cashAdvance: 0,
+    liabilityBalanceEnd: 0,
+    adjustmentsSigned: 0,
+    adjustmentsCount: 0,
+    sellerCompensationNet: 0,
+    payoutLegacyOpex: 0,
+    payoutDuplicate: 0,
+    payoutUnclassified: 0,
+    payoutUnclassifiedCount: 0,
+    cutoverDate: null,
+    missingRateCount: 0,
+    unpaidDebtAccrued: 0,
+  };
+}
+
+export function parseSellerFinancePnl(payload: unknown): SellerFinancePnl {
+  const empty = emptySellerFinancePnl();
+  let value: unknown = payload;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return empty;
+    }
+  }
+  if (!value || typeof value !== 'object') return empty;
+  const root = value as Record<string, unknown>;
+  const commissions = nested(root, 'commissions');
+  const goods = nested(root, 'goods');
+  const cash = nested(root, 'cash');
+  const liability = nested(root, 'liability');
+  const adjustments = nested(root, 'adjustments');
+  const manual = nested(root, 'manual_seller_payout');
+  const pnl = nested(root, 'pnl');
+  const accrued = jsonNum(commissions.accrued ?? pnl.commission_accrued);
+  const reversed = jsonNum(commissions.reversed ?? pnl.commission_reversed);
+  const goodsCogs = jsonNum(goods.cogs ?? pnl.goods_cogs);
+  const goodsCredit = jsonNum(goods.credit ?? pnl.goods_credit);
+  const compensation = jsonNum(
+    pnl.seller_compensation_net ?? accrued - reversed + goodsCogs - goodsCredit,
+  );
+  const cutover = manual.cutover_date;
+  return {
+    loaded: true,
+    commissionAccrued: accrued,
+    commissionReversed: reversed,
+    goodsCogs,
+    goodsCredit,
+    goodsCogsComplete: jsonBool(goods.cogs_complete, true),
+    goodsUnknownCostLineCount: jsonInt(goods.unknown_cost_line_count),
+    goodsZeroCostLineCount: jsonInt(goods.zero_cost_line_count),
+    goodsIssueCount: jsonInt(goods.issue_count),
+    goodsReturnCount: jsonInt(goods.return_count),
+    goodsAdvanceCredit: jsonNum(goods.advance_credit),
+    goodsSettlementCredit: jsonNum(goods.settlement_credit),
+    ledgerGoodsSigned: jsonNum(goods.ledger_goods_signed),
+    goodsLedgerDelta: jsonNum(goods.ledger_delta ?? goodsCredit + jsonNum(goods.ledger_goods_signed)),
+    goodsLedgerConsistent: jsonBool(goods.ledger_consistent, Math.abs(jsonNum(goods.ledger_delta)) < 0.005),
+    cashPayout: jsonNum(cash.payout),
+    cashAdvance: jsonNum(cash.advance),
+    liabilityBalanceEnd: jsonNum(liability.balance_end),
+    adjustmentsSigned: jsonNum(adjustments.signed),
+    adjustmentsCount: jsonInt(adjustments.count),
+    sellerCompensationNet: compensation,
+    payoutLegacyOpex: jsonNum(manual.legacy_opex_amount),
+    payoutDuplicate: jsonNum(manual.settlement_duplicate_amount),
+    payoutUnclassified: jsonNum(manual.unclassified_amount),
+    payoutUnclassifiedCount: jsonInt(manual.unclassified_count),
+    cutoverDate: typeof cutover === 'string' && cutover ? cutover.slice(0, 10) : null,
+    missingRateCount: jsonInt(commissions.missing_rate_count),
+    unpaidDebtAccrued: jsonNum(commissions.unpaid_debt_accrued),
+  };
+}
+
 export type FinanceExpenseEventRow = {
   id?: string | null;
   expense_id?: string | null;
@@ -298,11 +487,19 @@ export function parseFinanceExpenseEvents(payload: unknown): FinanceExpenseEvent
   return parseJsonbItems<FinanceExpenseEventRow>(payload);
 }
 
-export type FinanceRpcErrorKind = 'permission' | 'network' | 'conflict' | 'other';
+export type FinanceRpcErrorKind = 'permission' | 'network' | 'conflict' | 'missing' | 'other';
 
 export function financeRpcErrorKind(message: string | null | undefined): FinanceRpcErrorKind {
   const m = (message || '').toLowerCase();
   if (!m) return 'other';
+  if (
+    m.includes('could not find the function') ||
+    m.includes('pgrst202') ||
+    m.includes('function public.admin_finance_seller_pnl') ||
+    (m.includes('does not exist') && m.includes('admin_finance_seller_pnl'))
+  ) {
+    return 'missing';
+  }
   if (m.includes('failed to fetch') || m.includes('networkerror') || m.includes('load failed')) return 'network';
   if (
     m.includes('42501') ||
@@ -316,6 +513,21 @@ export function financeRpcErrorKind(message: string | null | undefined): Finance
   }
   if (m.includes('idempotency key reused')) return 'conflict';
   return 'other';
+}
+
+export function sellerPnlFromRpc(
+  data: unknown,
+  errorMessage: string | null | undefined
+): { pnl: SellerFinancePnl | null; status: SellerPnlStatus } {
+  if (errorMessage) {
+    return {
+      pnl: null,
+      status: financeRpcErrorKind(errorMessage) === 'missing' ? 'missing' : 'error',
+    };
+  }
+  const parsed = parseSellerFinancePnl(data);
+  if (!parsed.loaded) return { pnl: null, status: 'error' };
+  return { pnl: parsed, status: 'connected' };
 }
 
 export function mergeFinanceOrders(batches: FinanceOrder[][]): FinanceOrder[] {
@@ -349,8 +561,13 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     expensesInputComplete = false,
     itemSnapshots = new Map(),
     itemSnapshotsUnavailable = false,
+    sellerPnl: sellerPnlInput = null,
+    sellerPnlStatus = 'skipped',
+    cityScoped = false,
   } = input;
   const snapshotMap = itemSnapshotsUnavailable ? null : itemSnapshots;
+  const sellerPnl = sellerPnlInput?.loaded ? sellerPnlInput : emptySellerFinancePnl();
+  const sellerPnlLoaded = sellerPnl.loaded;
 
   const uniqueOrders = mergeFinanceOrders([orders]);
   const recognized = uniqueOrders.filter((o) => isConfirmedInRange(o, range));
@@ -553,29 +770,59 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
       const city = ensureCity(cityId);
       if (category === FINANCE_CARGO_CUSTOMS_CATEGORY) {
         city.cityCargo = money(city.cityCargo + amount);
-      } else {
+      } else if (!((sellerPnlLoaded || cityScoped) && category === FINANCE_SELLER_PAYOUT_CATEGORY)) {
         city.cityOperating = money(city.cityOperating + amount);
       }
-    } else {
+    } else if (!((sellerPnlLoaded || cityScoped) && category === FINANCE_SELLER_PAYOUT_CATEGORY)) {
       cat.companyWideAmount = money(cat.companyWideAmount + amount);
       companyWideExpenses = money(companyWideExpenses + amount);
     }
+    const skipPayoutInOpex = (sellerPnlLoaded || cityScoped) && category === FINANCE_SELLER_PAYOUT_CATEGORY;
     if (category === FINANCE_CARGO_CUSTOMS_CATEGORY) {
       cargoCustomsExpenses = money(cargoCustomsExpenses + amount);
-    } else {
+    } else if (!skipPayoutInOpex) {
       operatingExpenses = money(operatingExpenses + amount);
     }
   }
 
+  const applySellerCompensation = sellerPnlLoaded && !cityScoped;
+  if (applySellerCompensation && sellerPnl.payoutLegacyOpex > 0) {
+    operatingExpenses = money(operatingExpenses + sellerPnl.payoutLegacyOpex);
+    companyWideExpenses = money(companyWideExpenses + sellerPnl.payoutLegacyOpex);
+  }
+
   const cogsComplete = missingCostLineCount === 0;
+  const goodsCogsComplete = sellerPnl.goodsCogsComplete;
   const missingCostProductCount = missingProducts.size;
   const partialGrossProfit = money(revenue - cogsKnown);
   const estimatedGrossProfit = cogsComplete ? partialGrossProfit : null;
-  const workingNet = money(partialGrossProfit - operatingExpenses);
-  const estimatedNetProfit =
-    cogsComplete && expensesInputComplete ? money((estimatedGrossProfit ?? 0) - operatingExpenses) : null;
-  const preliminaryNetProfit = cogsComplete && !expensesInputComplete ? workingNet : null;
-  const profitReliable = cogsComplete && expensesInputComplete;
+  const sellerCompensationNet = applySellerCompensation ? money(sellerPnl.sellerCompensationNet) : 0;
+  const otherOperatingExpenses = operatingExpenses;
+  const computedNetProfit =
+    !cityScoped && cogsComplete && goodsCogsComplete
+      ? money(partialGrossProfit - sellerCompensationNet - otherOperatingExpenses)
+      : null;
+  const profitReviewRequired =
+    cityScoped ||
+    sellerPnl.adjustmentsCount > 0 ||
+    sellerPnl.payoutUnclassified > 0 ||
+    sellerPnl.payoutUnclassifiedCount > 0 ||
+    sellerPnl.missingRateCount > 0 ||
+    !sellerPnl.goodsLedgerConsistent;
+  const pnlDisconnected = sellerPnlStatus === 'missing' || sellerPnlStatus === 'error';
+  const netInputsComplete =
+    !cityScoped &&
+    !pnlDisconnected &&
+    cogsComplete &&
+    goodsCogsComplete &&
+    expensesInputComplete &&
+    !profitReviewRequired;
+  const estimatedNetProfit = netInputsComplete ? computedNetProfit : null;
+  const preliminaryNetProfit =
+    !pnlDisconnected && cogsComplete && goodsCogsComplete && !expensesInputComplete && !profitReviewRequired
+      ? computedNetProfit
+      : null;
+  const profitReliable = netInputsComplete;
 
   const lineCount = historicalLineCount + estimatedLineCount + missingCostLineCount;
   let cogsQuality: FinanceCogsQuality = 'estimated';
@@ -593,7 +840,18 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     warnings.push('cogs_is_current_catalog_not_historical');
   }
   if (!cogsComplete) warnings.push('cogs_incomplete');
+  if (!goodsCogsComplete) warnings.push('seller_goods_cogs_incomplete');
   if (!expensesInputComplete) warnings.push('expenses_incomplete');
+  if (sellerPnl.payoutUnclassified > 0 || sellerPnl.payoutUnclassifiedCount > 0) {
+    warnings.push('seller_payout_unclassified');
+  }
+  if (sellerPnl.adjustmentsCount > 0) warnings.push('seller_adjustments_unclassified');
+  if (!sellerPnl.goodsLedgerConsistent) warnings.push('seller_goods_ledger_mismatch');
+  if (pnlDisconnected) warnings.push('seller_pnl_unavailable');
+  if (sellerPnl.missingRateCount > 0) warnings.push('seller_missing_rate');
+  if (sellerPnl.unpaidDebtAccrued > 0) warnings.push('seller_unpaid_debt_accrual');
+  if (sellerPnl.goodsZeroCostLineCount > 0) warnings.push('seller_goods_zero_cost');
+  if (cityScoped) warnings.push('seller_city_scope');
   warnings.push('cargo_customs_held_out_of_net');
   if (companyWideExpenses > 0) warnings.push('company_expenses_not_allocated_to_cities');
   if (revenue === 0) warnings.push('zero_revenue');
@@ -670,9 +928,11 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
 
   return {
     revenue,
+    grossRevenue: revenue,
     recognizedOrderCount: recognized.length,
     averageCheck: recognized.length > 0 ? money(revenue / recognized.length) : 0,
     cogsKnown,
+    salesCogs: cogsKnown,
     cogsComplete,
     missingCostProductCount,
     missingCostLineCount,
@@ -681,10 +941,37 @@ export function buildAdminFinance(input: BuildAdminFinanceInput): AdminFinanceRe
     partialGrossProfit,
     expensesByCategory: [...categoryMap.values()].sort((a, b) => a.category.localeCompare(b.category)),
     operatingExpenses,
+    otherOperatingExpenses,
     cargoCustomsExpenses,
     companyWideExpenses,
     cityTaggedExpenses,
     expensesComplete: expensesInputComplete,
+    commissionAccrual: sellerPnl.commissionAccrued,
+    commissionReversal: sellerPnl.commissionReversed,
+    goodsIssueCogs: sellerPnl.goodsCogs,
+    goodsSettlementCredit: sellerPnl.goodsCredit,
+    sellerCompensationNet,
+    sellerLiability: sellerPnl.liabilityBalanceEnd,
+    cashPayouts: sellerPnl.cashPayout,
+    cashAdvances: sellerPnl.cashAdvance,
+    sellerPayoutLegacyOpex: sellerPnl.payoutLegacyOpex,
+    sellerPayoutDuplicate: sellerPnl.payoutDuplicate,
+    sellerPayoutUnclassified: sellerPnl.payoutUnclassified,
+    sellerAdjustmentsSigned: sellerPnl.adjustmentsSigned,
+    sellerAdjustmentsCount: sellerPnl.adjustmentsCount,
+    goodsAdvanceCredit: sellerPnl.goodsAdvanceCredit,
+    goodsIssueSettlementCredit: sellerPnl.goodsSettlementCredit,
+    goodsIssueCount: sellerPnl.goodsIssueCount,
+    goodsReturnCount: sellerPnl.goodsReturnCount,
+    missingRateCount: sellerPnl.missingRateCount,
+    unpaidDebtAccrued: sellerPnl.unpaidDebtAccrued,
+    goodsZeroCostLineCount: sellerPnl.goodsZeroCostLineCount,
+    sellerPnlStatus,
+    cityScoped,
+    goodsLedgerDelta: sellerPnl.goodsLedgerDelta,
+    goodsLedgerConsistent: sellerPnl.goodsLedgerConsistent,
+    profitReviewRequired,
+    computedNetProfit,
     estimatedNetProfit,
     preliminaryNetProfit,
     grossMarginPct,

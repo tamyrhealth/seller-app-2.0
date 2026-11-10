@@ -20,13 +20,17 @@ import {
   FINANCE_EXPENSE_EVENTS_RPC,
   FINANCE_EXPENSE_UPDATE_RPC,
   FINANCE_EXPENSES_LIST_RPC,
+  FINANCE_SELLER_PNL_RPC,
   financeRpcErrorKind,
   parseFinanceExpenseEvents,
   parseFinanceExpensesList,
+  sellerPnlFromRpc,
   type AdminFinanceReport,
   type FinanceExpenseEventRow,
   type FinanceExpenseRow,
   type FinanceOrder,
+  type SellerFinancePnl,
+  type SellerPnlStatus,
 } from '@/lib/adminFinance';
 import {
   collectFinanceOrderItemIds,
@@ -42,8 +46,13 @@ import {
   financeGrossKpi,
   financeMarginKpi,
   financeNetKpi,
+  financeProfitBreakdown,
+  financeReliability,
+  financeReliabilityLabelKey,
+  financeWarningKey,
   expensesCompleteForPeriod,
   financeOpexKpi,
+  sellerLiabilitySplit,
   periodExpenseJournalEmpty,
   ordersForCityView,
   resolveFinanceRange,
@@ -80,6 +89,7 @@ function financeErrorCopy(message: string, t: (key: string) => string): string {
   if (kind === 'permission') return t('finance.permissionDenied');
   if (kind === 'network') return t('finance.networkError');
   if (kind === 'conflict') return t('finance.idempotencyConflict');
+  if (kind === 'missing') return t('finance.pnlDisconnected');
   return message || t('finance.saveError');
 }
 
@@ -87,29 +97,18 @@ function KpiCard({
   label,
   value,
   hint,
-  tone,
 }: {
   label: string;
   value: string;
   hint?: string;
-  tone: 'blue' | 'green' | 'indigo' | 'amber' | 'rose' | 'slate';
 }) {
-  const tones = {
-    blue: 'bg-blue-50 text-blue-700',
-    green: 'bg-emerald-50 text-emerald-700',
-    indigo: 'bg-indigo-50 text-indigo-700',
-    amber: 'bg-amber-50 text-amber-700',
-    rose: 'bg-rose-50 text-rose-700',
-    slate: 'bg-slate-100 text-slate-600',
-  };
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-slate-500">{label}</p>
-        <span className={`inline-flex h-2.5 w-2.5 rounded-full ${tones[tone]}`} />
-      </div>
-      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">{value}</p>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+    <div className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+      <p className="text-[11px] leading-4 text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-lg font-semibold tabular-nums tracking-tight text-slate-900 sm:text-xl">
+        {value}
+      </p>
+      {hint ? <p className="mt-0.5 text-[11px] leading-4 text-slate-500">{hint}</p> : null}
     </div>
   );
 }
@@ -117,9 +116,9 @@ function KpiCard({
 function FinanceSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
-          <div key={i} className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-white shadow-sm" />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+          <div key={i} className="h-16 animate-pulse rounded-xl border border-slate-200 bg-white" />
         ))}
       </div>
       <div className="h-56 animate-pulse rounded-2xl border border-slate-200 bg-white shadow-sm" />
@@ -176,6 +175,9 @@ export default function AdminFinancePage() {
   const [itemSnapshots, setItemSnapshots] = useState<Map<string, number | null>>(new Map());
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<FinanceExpenseRow[]>([]);
+  const [sellerPnl, setSellerPnl] = useState<SellerFinancePnl | null>(null);
+  const [sellerPnlStatus, setSellerPnlStatus] = useState<SellerPnlStatus>('skipped');
+  const [sellerPnlError, setSellerPnlError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -261,13 +263,17 @@ export default function AdminFinancePage() {
     setError(null);
     (async () => {
       try {
-        const [rev, costRes, expRes] = await Promise.all([
+        const [rev, costRes, expRes, pnlRes] = await Promise.all([
           fetchRecognizedWindow(spec.range),
           supabase.rpc(FINANCE_COSTS_RPC),
           supabase.rpc(FINANCE_EXPENSES_LIST_RPC, {
             p_from: spec.fromYmd,
             p_to: spec.toYmd,
             p_include_deleted: false,
+          }),
+          supabase.rpc(FINANCE_SELLER_PNL_RPC, {
+            p_from: spec.fromYmd,
+            p_to: spec.toYmd,
           }),
         ]);
         if (cancelled) return;
@@ -298,6 +304,13 @@ export default function AdminFinancePage() {
         setItemSnapshots(snap.map);
         setSnapshotError(snap.error);
         setExpenses(parseFinanceExpensesList(expRes.data));
+        const pnlParsed = sellerPnlFromRpc(
+          pnlRes.data,
+          [pnlRes.error?.code, rpcMessage(pnlRes.error)].filter(Boolean).join(' ')
+        );
+        setSellerPnl(pnlParsed.pnl);
+        setSellerPnlStatus(pnlParsed.status);
+        setSellerPnlError(pnlParsed.status === 'connected' ? null : rpcMessage(pnlRes.error) || 'seller-pnl');
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
@@ -350,6 +363,9 @@ export default function AdminFinancePage() {
       expensesInputComplete: expensesComplete,
       itemSnapshots,
       itemSnapshotsUnavailable: Boolean(snapshotError),
+      sellerPnl,
+      sellerPnlStatus,
+      cityScoped: cityId !== 'all',
     });
   }, [
     spec,
@@ -365,6 +381,8 @@ export default function AdminFinancePage() {
     noSellerLabel,
     unnamedCityLabel,
     expensesComplete,
+    sellerPnl,
+    sellerPnlStatus,
   ]);
 
   const sellerRows = useMemo(
@@ -507,12 +525,34 @@ export default function AdminFinancePage() {
   const opexKpi = report ? financeOpexKpi(report, journalEmpty) : null;
   const netKpi = report ? financeNetKpi(report) : null;
   const marginKpi = report ? financeMarginKpi(report) : null;
+  const reliability = report ? financeReliability(report) : null;
+  const liability = report ? sellerLiabilitySplit(report.sellerLiability) : null;
+  const breakdown = report ? financeProfitBreakdown(report) : [];
+  const reviewWarnings = report
+    ? report.warnings.filter((code) =>
+        (report.cityScoped
+          ? ['cogs_incomplete', 'seller_goods_cogs_incomplete', 'seller_city_scope']
+          : [
+              'cogs_incomplete',
+              'seller_goods_cogs_incomplete',
+              'seller_payout_unclassified',
+              'seller_adjustments_unclassified',
+              'seller_goods_ledger_mismatch',
+              'seller_unpaid_debt_accrual',
+              'seller_missing_rate',
+              'seller_pnl_unavailable',
+              'seller_goods_zero_cost',
+            ]
+        ).includes(code)
+      )
+    : [];
+  const companyPnl = Boolean(report && !report.cityScoped);
 
   return (
     <Protected role="admin">
       <div className="min-h-screen bg-slate-50">
         <NavAdmin />
-        <div className="mx-auto max-w-6xl p-4 pb-10">
+        <div className="mx-auto min-w-0 max-w-6xl overflow-x-hidden p-4 pb-10">
           <div className="mb-6">
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{t('finance.title')}</h1>
             <p className="mt-1 text-sm text-slate-500">{t('finance.subtitle')}</p>
@@ -534,21 +574,21 @@ export default function AdminFinancePage() {
               ))}
             </div>
             {mode === 'custom' ? (
-              <div className="flex flex-wrap gap-3">
-                <label className="text-sm text-slate-600">
+              <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <label className="min-w-0 text-sm text-slate-600">
                   {t('admin.fromDate')}
                   <input
                     type="date"
-                    className="ml-2 rounded-lg border border-slate-200 px-2 py-1.5"
+                    className="mt-1 w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1.5 sm:ml-2 sm:mt-0 sm:w-auto"
                     value={customFrom}
                     onChange={(e) => setCustomFrom(e.target.value)}
                   />
                 </label>
-                <label className="text-sm text-slate-600">
+                <label className="min-w-0 text-sm text-slate-600">
                   {t('admin.toDate')}
                   <input
                     type="date"
-                    className="ml-2 rounded-lg border border-slate-200 px-2 py-1.5"
+                    className="mt-1 w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1.5 sm:ml-2 sm:mt-0 sm:w-auto"
                     value={customTo}
                     onChange={(e) => setCustomTo(e.target.value)}
                   />
@@ -611,54 +651,160 @@ export default function AdminFinancePage() {
                 </p>
               ) : null}
               {report.cogsComplete && !report.expensesComplete ? (
-                <p className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+                <p className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
                   {t('finance.expensesIncomplete')}
                 </p>
               ) : null}
+              {reliability === 'disconnected' ? (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  {t('finance.pnlDisconnected')}
+                  <span className="mt-1 block text-xs text-amber-800">{t('finance.pnlDisconnectedHint')}</span>
+                </p>
+              ) : null}
+              {sellerPnlStatus === 'error' && sellerPnlError ? (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  {t('finance.pnlRpcError')}: {financeErrorCopy(sellerPnlError, t)}
+                </p>
+              ) : null}
+              {report.cityScoped ? (
+                <p className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                  {t('finance.cityOperational')}
+                </p>
+              ) : null}
 
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <KpiCard label={t('finance.revenue')} value={`${formatMoney(report.revenue)} ₸`} tone="blue" />
+              {reliability ? (
+                <p className="text-sm font-medium text-slate-800">
+                  {t(financeReliabilityLabelKey(reliability))}
+                </p>
+              ) : null}
+
+              {reviewWarnings.length || journalEmpty ? (
+                <div className="space-y-1 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                  {reviewWarnings.map((code) => (
+                    <p key={code}>{t(financeWarningKey(code) as 'finance.cogsMissing')}</p>
+                  ))}
+                  {journalEmpty && !report.expensesComplete ? <p>{t('finance.warnJournalEmpty')}</p> : null}
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <KpiCard label={t('finance.revenue')} value={`${formatMoney(report.revenue)} ₸`} />
                 <KpiCard
-                  label={t('finance.orderCount')}
-                  value={formatCount(report.recognizedOrderCount)}
-                  tone="blue"
-                />
-                <KpiCard
-                  label={t('finance.avgCheck')}
-                  value={`${formatMoney(report.averageCheck)} ₸`}
-                  tone="blue"
-                />
-                <KpiCard
-                  label={t('finance.cogs')}
+                  label={t('finance.salesCogs')}
                   value={kpiText(cogsKpi)}
                   hint={kpiHint(cogsKpi, t(financeCogsHintKey(report)))}
-                  tone="amber"
                 />
+                <KpiCard label={t('finance.gross')} value={kpiText(grossKpi)} hint={kpiHint(grossKpi)} />
+                {companyPnl ? (
+                  <>
+                    <KpiCard
+                      label={t('finance.commissionAccrual')}
+                      value={`${formatMoney(report.commissionAccrual)} ₸`}
+                    />
+                    <KpiCard
+                      label={t('finance.commissionReversal')}
+                      value={`${formatMoney(report.commissionReversal)} ₸`}
+                    />
+                    <KpiCard
+                      label={t('finance.goodsIssueCogs')}
+                      value={`${formatMoney(report.goodsIssueCogs)} ₸`}
+                    />
+                    <KpiCard
+                      label={t('finance.goodsCreditAdj')}
+                      value={`${formatMoney(report.goodsSettlementCredit)} ₸`}
+                      hint={t('finance.goodsCreditHint')}
+                    />
+                  </>
+                ) : null}
                 <KpiCard
-                  label={t('finance.gross')}
-                  value={kpiText(grossKpi)}
-                  hint={kpiHint(grossKpi)}
-                  tone={grossKpi.kind === 'unavailable' ? 'slate' : 'green'}
-                />
-                <KpiCard
-                  label={t('finance.opex')}
+                  label={report.cityScoped ? t('finance.cityOpex') : t('finance.otherOpex')}
                   value={opexKpi.kind === 'unavailable' ? t('finance.expensesNotEntered') : kpiText(opexKpi)}
                   hint={kpiHint(opexKpi)}
-                  tone={opexKpi.kind === 'unavailable' ? 'slate' : 'indigo'}
                 />
-                <KpiCard
-                  label={t('finance.net')}
-                  value={kpiText(netKpi)}
-                  hint={kpiHint(netKpi)}
-                  tone={netKpi.kind === 'preliminary' ? 'amber' : netKpi.kind === 'unavailable' ? 'slate' : 'green'}
-                />
-                <KpiCard
-                  label={t('finance.margin')}
-                  value={kpiText(marginKpi, true)}
-                  hint={kpiHint(marginKpi)}
-                  tone="rose"
-                />
+                {companyPnl ? (
+                  <KpiCard label={t('finance.net')} value={kpiText(netKpi)} hint={kpiHint(netKpi)} />
+                ) : (
+                  <KpiCard label={t('finance.net')} value={t('finance.unavailable')} hint={t('finance.cityOperational')} />
+                )}
               </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <KpiCard label={t('finance.orderCount')} value={formatCount(report.recognizedOrderCount)} />
+                <KpiCard label={t('finance.avgCheck')} value={`${formatMoney(report.averageCheck)} ₸`} />
+                {companyPnl ? (
+                  <KpiCard label={t('finance.margin')} value={kpiText(marginKpi, true)} hint={kpiHint(marginKpi)} />
+                ) : null}
+              </div>
+
+              {companyPnl ? (
+                <>
+              <Section title={t('finance.profitBreakdown')}>
+                <div className="min-w-0 space-y-1.5 text-sm">
+                  {breakdown.map((row) => {
+                    const amountText = Number.isNaN(row.amount)
+                      ? t('finance.unavailable')
+                      : `${formatMoney(row.amount)} ₸`;
+                    const sign = row.sign === 'minus' ? '−' : row.sign === 'plus' ? '+' : '=';
+                    return (
+                      <div key={row.key} className="flex min-w-0 items-baseline justify-between gap-3">
+                        <span className="min-w-0 text-slate-600">
+                          {sign} {t(row.key as 'finance.revenue')}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-slate-900">{amountText}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Section>
+
+              <Section title={t('finance.settlements')} hint={t('finance.settlementsHint')}>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <KpiCard label={t('finance.commissionAccrual')} value={`${formatMoney(report.commissionAccrual)} ₸`} />
+                  <KpiCard label={t('finance.commissionReversal')} value={`${formatMoney(report.commissionReversal)} ₸`} />
+                  <KpiCard label={t('finance.cashPaid')} value={`${formatMoney(report.cashPayouts)} ₸`} />
+                  <KpiCard label={t('finance.cashAdvance')} value={`${formatMoney(report.cashAdvances)} ₸`} />
+                  <KpiCard
+                    label={t('finance.goodsIssued')}
+                    value={`${formatMoney(report.goodsIssueSettlementCredit)} ₸`}
+                  />
+                  <KpiCard label={t('finance.goodsAdvance')} value={`${formatMoney(report.goodsAdvanceCredit)} ₸`} />
+                  <KpiCard label={t('finance.goodsReturns')} value={formatCount(report.goodsReturnCount)} />
+                  {liability && liability.sellerOwes > 0 ? (
+                    <KpiCard
+                      label={t('finance.sellerOwes')}
+                      value={`${formatMoney(liability.sellerOwes)} ₸`}
+                    />
+                  ) : (
+                    <KpiCard
+                      label={t('finance.liabilityEnd')}
+                      value={`${formatMoney(liability?.companyOwes || 0)} ₸`}
+                    />
+                  )}
+                </div>
+              </Section>
+
+              <Section title={t('finance.payoutClasses')} hint={t('finance.payoutClassesHint')}>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <KpiCard
+                    label={t('finance.payoutLegacy')}
+                    value={`${formatMoney(report.sellerPayoutLegacyOpex)} ₸`}
+                  />
+                  <KpiCard
+                    label={t('finance.payoutDuplicate')}
+                    value={`${formatMoney(report.sellerPayoutDuplicate)} ₸`}
+                  />
+                  <KpiCard
+                    label={t('finance.payoutUnclassified')}
+                    value={`${formatMoney(report.sellerPayoutUnclassified)} ₸`}
+                  />
+                </div>
+                {report.sellerAdjustmentsCount > 0 ? (
+                  <p className="mt-3 text-sm text-amber-900">
+                    {t('finance.warnAdjustmentsAmount')}: {formatMoney(report.sellerAdjustmentsSigned)} ₸
+                  </p>
+                ) : null}
+              </Section>
+                </>
+              ) : null}
 
               <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm">
                 <input
@@ -769,7 +915,9 @@ export default function AdminFinancePage() {
                           <th className="pb-2 text-right font-medium">{t('finance.revenue')}</th>
                           <th className="pb-2 text-right font-medium">{t('finance.cityProfit')}</th>
                           <th className="pb-2 text-right font-medium">{t('finance.cityOpex')}</th>
-                          <th className="pb-2 text-right font-medium">{t('finance.cityNet')}</th>
+                          <th className="pb-2 text-right font-medium" title={t('finance.cityNetHint')}>
+                            {t('finance.cityNet')}
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -1087,24 +1235,20 @@ export default function AdminFinancePage() {
                       label={t('stats.unpaidDebts')}
                       value={`${formatMoney(receivables.unpaidDebtAmount)} ₸`}
                       hint={t('finance.receivablesAsOfNow')}
-                      tone="amber"
                     />
                     <KpiCard
                       label={t('stats.unpaidDebtOrders')}
                       value={formatCount(receivables.unpaidDebtOrders)}
-                      tone="amber"
                     />
                     {receivables.overdueAvailable ? (
                       <>
                         <KpiCard
                           label={t('stats.overdueDebts')}
                           value={`${formatMoney(receivables.overdueDebtAmount || 0)} ₸`}
-                          tone="rose"
                         />
                         <KpiCard
                           label={t('stats.overdueDebtOrders')}
                           value={formatCount(receivables.overdueDebtOrders || 0)}
-                          tone="rose"
                         />
                       </>
                     ) : (

@@ -180,22 +180,88 @@ export function financeGrossKpi(report: AdminFinanceReport): FinanceKpi {
   return { kind: 'estimate', amount: report.estimatedGrossProfit };
 }
 
+export type FinanceReliability = 'complete' | 'preliminary' | 'incomplete' | 'disconnected' | 'city';
+
+export function financeReliability(report: AdminFinanceReport): FinanceReliability {
+  if (report.cityScoped) return 'city';
+  if (report.sellerPnlStatus === 'missing' || report.sellerPnlStatus === 'error') return 'disconnected';
+  if (!report.cogsComplete || report.warnings.includes('seller_goods_cogs_incomplete')) return 'incomplete';
+  if (report.profitReviewRequired) return 'incomplete';
+  if (!report.expensesComplete) return 'preliminary';
+  if (report.estimatedNetProfit == null) return 'incomplete';
+  return 'complete';
+}
+
+export function financeReliabilityLabelKey(status: FinanceReliability): string {
+  if (status === 'complete') return 'finance.reliabilityComplete';
+  if (status === 'preliminary') return 'finance.reliabilityPreliminary';
+  if (status === 'disconnected') return 'finance.pnlDisconnected';
+  if (status === 'city') return 'finance.cityOperational';
+  return 'finance.reliabilityIncomplete';
+}
+
 export function financeNetKpi(report: AdminFinanceReport): FinanceKpi {
-  if (!report.cogsComplete) return { kind: 'unavailable', amount: null };
-  if (!report.expensesComplete) return { kind: 'preliminary', amount: report.preliminaryNetProfit };
+  const status = financeReliability(report);
+  if (status === 'disconnected' || status === 'incomplete' || status === 'city') {
+    return { kind: 'unavailable', amount: null };
+  }
+  if (status === 'preliminary') return { kind: 'preliminary', amount: report.preliminaryNetProfit };
   if (report.cogsIsHistorical) return { kind: 'fact', amount: report.estimatedNetProfit };
   return { kind: 'estimate', amount: report.estimatedNetProfit };
 }
 
+export function sellerLiabilitySplit(balance: number): { companyOwes: number; sellerOwes: number } {
+  if (balance > 0) return { companyOwes: balance, sellerOwes: 0 };
+  if (balance < 0) return { companyOwes: 0, sellerOwes: -balance };
+  return { companyOwes: 0, sellerOwes: 0 };
+}
+
+export type FinanceBreakdownRow = { key: string; sign: 'plus' | 'minus' | 'eq'; amount: number };
+
+export function financeWarningKey(code: AdminFinanceReport['warnings'][number]): string {
+  const map: Record<AdminFinanceReport['warnings'][number], string> = {
+    cogs_is_current_catalog_not_historical: 'finance.cogsHint',
+    cogs_mixed_historical_and_estimated: 'finance.cogsMixed',
+    cogs_historical_unavailable: 'finance.snapshotsUnavailable',
+    cogs_incomplete: 'finance.cogsMissing',
+    expenses_incomplete: 'finance.expensesIncomplete',
+    cargo_customs_held_out_of_net: 'finance.cargoHint',
+    company_expenses_not_allocated_to_cities: 'finance.companyHint',
+    zero_revenue: 'finance.empty',
+    seller_payout_unclassified: 'finance.warnPayoutUnclassified',
+    seller_adjustments_unclassified: 'finance.warnAdjustments',
+    seller_goods_ledger_mismatch: 'finance.warnGoodsMismatch',
+    seller_goods_cogs_incomplete: 'finance.warnGoodsCogs',
+    seller_pnl_unavailable: 'finance.pnlDisconnected',
+    seller_missing_rate: 'finance.warnMissingRate',
+    seller_unpaid_debt_accrual: 'finance.warnUnpaidDebt',
+    seller_goods_zero_cost: 'finance.warnGoodsZeroCost',
+    seller_city_scope: 'finance.cityOperational',
+  };
+  return map[code];
+}
+
+export function financeProfitBreakdown(report: AdminFinanceReport): FinanceBreakdownRow[] {
+  return [
+    { key: 'finance.revenue', sign: 'plus', amount: report.revenue },
+    { key: 'finance.salesCogs', sign: 'minus', amount: report.salesCogs },
+    { key: 'finance.commissionAccrual', sign: 'minus', amount: report.commissionAccrual },
+    { key: 'finance.commissionReversal', sign: 'plus', amount: report.commissionReversal },
+    { key: 'finance.goodsIssueCogs', sign: 'minus', amount: report.goodsIssueCogs },
+    { key: 'finance.goodsCreditAdj', sign: 'plus', amount: report.goodsSettlementCredit },
+    { key: 'finance.otherOpex', sign: 'minus', amount: report.otherOperatingExpenses },
+    { key: 'finance.net', sign: 'eq', amount: report.estimatedNetProfit ?? Number.NaN },
+  ];
+}
+
 export function financeMarginKpi(report: AdminFinanceReport): FinanceKpi {
   if (report.revenue <= 0) return { kind: 'unavailable', amount: null };
-  if (!report.cogsComplete) return { kind: 'unavailable', amount: null };
-  if (!report.expensesComplete) {
-    if (report.preliminaryNetProfit == null) return { kind: 'unavailable', amount: null };
-    return { kind: 'preliminary', amount: Number(((report.preliminaryNetProfit / report.revenue) * 100).toFixed(2)) };
-  }
-  if (report.cogsIsHistorical) return { kind: 'fact', amount: report.netMarginPct };
-  return { kind: 'estimate', amount: report.netMarginPct };
+  const net = financeNetKpi(report);
+  if (net.kind === 'unavailable' || net.amount == null) return { kind: 'unavailable', amount: null };
+  const pct = Number(((net.amount / report.revenue) * 100).toFixed(2));
+  if (net.kind === 'preliminary') return { kind: 'preliminary', amount: pct };
+  if (report.cogsIsHistorical) return { kind: 'fact', amount: pct };
+  return { kind: 'estimate', amount: pct };
 }
 
 export function financeCogsHintKey(report: AdminFinanceReport): string {

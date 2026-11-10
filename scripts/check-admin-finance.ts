@@ -24,8 +24,13 @@ import {
   parseFinanceExpenseEvents,
   parseFinanceExpensesList,
   uniqueLiveExpenses,
+  emptySellerFinancePnl,
+  parseSellerFinancePnl,
+  sellerPnlFromRpc,
+  FINANCE_SELLER_PNL_RPC,
   type BuildAdminFinanceInput,
   type FinanceOrder,
+  type SellerFinancePnl,
 } from '../lib/adminFinance';
 import {
   chunkIds,
@@ -42,6 +47,9 @@ import {
   financeCogsHintKey,
   financeGrossKpi,
   financeNetKpi,
+  financeProfitBreakdown,
+  financeReliability,
+  sellerLiabilitySplit,
   expensesCompleteForPeriod,
   financeOpexKpi,
   periodExpenseJournalEmpty,
@@ -928,6 +936,286 @@ for (const key of kzSet) if (!ruSet.has(key)) fail(`ru missing ${key}`);
 if (!i18n.includes('не сохранённое закрытие месяца') || !i18n.includes('сақталған ай жабылуы емес')) {
   fail('completeness not month close');
 }
+
+function sellerPnl(partial: Partial<SellerFinancePnl> = {}): SellerFinancePnl {
+  return { ...emptySellerFinancePnl(), loaded: true, ...partial };
+}
+
+const parsedPnl = parseSellerFinancePnl({
+  commissions: { accrued: 1080, reversed: 0 },
+  goods: {
+    cogs: 105,
+    credit: 380,
+    cogs_complete: true,
+    ledger_goods_signed: -380,
+    ledger_delta: 0,
+    ledger_consistent: true,
+    unknown_cost_line_count: 0,
+    issue_count: 2,
+    return_count: 0,
+    settlement_credit: 300,
+    advance_credit: 80,
+  },
+  cash: { payout: 400, advance: 200, include_in_pnl: false },
+  liability: { balance_end: -555 },
+  adjustments: { signed: 30, count: 2, classified: false },
+  pnl: { seller_compensation_net: 805 },
+  manual_seller_payout: {
+    unclassified_amount: 250,
+    settlement_duplicate_amount: 400,
+    legacy_opex_amount: 0,
+    cutover_date: '2026-01-10',
+  },
+});
+if (!parsedPnl.loaded) fail('parse seller pnl loaded');
+if (parsedPnl.sellerCompensationNet !== 805) fail('parse compensation');
+if (parsedPnl.payoutUnclassified !== 250 || parsedPnl.cashPayout !== 400) fail('parse payout split');
+if (parsedPnl.goodsLedgerConsistent !== true) fail('parse goods consistent');
+if (FINANCE_SELLER_PNL_RPC !== 'admin_finance_seller_pnl') fail('seller pnl rpc name');
+
+const commissionOnly = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    sellerCompensationNet: 1000,
+  }),
+});
+if (commissionOnly.revenue !== 10000 || commissionOnly.grossRevenue !== 10000) fail('gross revenue alias');
+if (commissionOnly.salesCogs !== 2000) fail('sales cogs');
+if (commissionOnly.commissionAccrual !== 1000) fail('commission accrual field');
+if (commissionOnly.cashPayouts !== 0) fail('no cash in commission-only');
+if (commissionOnly.estimatedNetProfit !== 10000 - 2000 - 1000) fail('ordinary commission net');
+if (commissionOnly.profitReliable !== true) fail('ordinary commission reliable');
+
+const withCash = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    sellerCompensationNet: 1000,
+    cashPayout: 1000,
+  }),
+});
+if (withCash.estimatedNetProfit !== 7000) fail('cash payout must not reduce net again');
+if (withCash.cashPayouts !== 1000) fail('cash payout reported');
+
+const withAdvance = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    sellerCompensationNet: 1000,
+    cashAdvance: 200,
+    liabilityBalanceEnd: -200,
+  }),
+});
+if (withAdvance.estimatedNetProfit !== 7000) fail('cash advance must not reduce net');
+if (withAdvance.sellerLiability !== -200) fail('negative liability');
+
+const goodsIssue = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    goodsCogs: 700,
+    goodsCredit: 1000,
+    sellerCompensationNet: 700,
+    goodsIssueCount: 1,
+  }),
+});
+if (goodsIssue.estimatedNetProfit !== 10000 - 2000 - 700) fail('goods issue net uses cogs not credit');
+if (goodsIssue.goodsSettlementCredit !== 1000) fail('credit is not revenue field');
+if (goodsIssue.revenue !== 10000) fail('goods credit must not increase revenue');
+
+const nextMonthReturn = report({
+  orders: [],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    goodsCogs: -700,
+    goodsCredit: -1000,
+    goodsReturnCount: 1,
+    sellerCompensationNet: 300,
+  }),
+});
+if (nextMonthReturn.estimatedNetProfit !== -300) fail('return next month net');
+if (nextMonthReturn.revenue !== 0) fail('return is not a sale');
+
+const historicalPayout = report({
+  orders: [paid],
+  expenses: [{ expense_date: fromYmd, category: 'seller_payout', amount: 90 }],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({ payoutLegacyOpex: 90 }),
+});
+if (historicalPayout.operatingExpenses !== 90) fail('legacy seller_payout stays in opex');
+if (historicalPayout.estimatedNetProfit !== 10000 - 2000 - 90) fail('historical payout in net');
+if (historicalPayout.warnings.includes('seller_payout_unclassified')) fail('legacy must not be unclassified');
+
+const mixedMonth = report({
+  orders: [paid],
+  expenses: [
+    { expense_date: fromYmd, category: 'seller_payout', amount: 250 },
+    { expense_date: fromYmd, category: 'seller_payout', amount: 400 },
+    { expense_date: fromYmd, category: 'rent', amount: 100 },
+  ],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    sellerCompensationNet: 1000,
+    payoutUnclassified: 250,
+    payoutUnclassifiedCount: 1,
+    payoutDuplicate: 400,
+  }),
+});
+if (mixedMonth.operatingExpenses !== 100) fail('mixed month opex is rent only');
+if (mixedMonth.computedNetProfit !== 10000 - 2000 - 1000 - 100) fail('mixed computed net');
+if (mixedMonth.estimatedNetProfit !== null) fail('unclassified payout blocks exact net');
+if (mixedMonth.profitReliable) fail('mixed month net is not a fact');
+if (!mixedMonth.profitReviewRequired) fail('mixed review required');
+if (!mixedMonth.warnings.includes('seller_payout_unclassified')) fail('unclassified warning');
+
+const withAdj = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    sellerCompensationNet: 1000,
+    adjustmentsSigned: 50,
+    adjustmentsCount: 1,
+  }),
+});
+if (withAdj.estimatedNetProfit !== null) fail('adjustment blocks exact net');
+if (withAdj.computedNetProfit !== 7000) fail('adjustment excluded from formula');
+if (withAdj.sellerAdjustmentsSigned !== 50) fail('adjustment visible');
+if (!withAdj.warnings.includes('seller_adjustments_unclassified')) fail('adjustment warning');
+
+const mismatch = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    goodsCredit: 22,
+    ledgerGoodsSigned: 0,
+    goodsLedgerDelta: 22,
+    goodsLedgerConsistent: false,
+    sellerCompensationNet: -22,
+  }),
+});
+if (mismatch.estimatedNetProfit !== null) fail('goods mismatch blocks net');
+if (!mismatch.warnings.includes('seller_goods_ledger_mismatch')) fail('mismatch warning');
+
+const unknownGoods = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    goodsCredit: 12,
+    goodsCogsComplete: false,
+    goodsUnknownCostLineCount: 1,
+    sellerCompensationNet: -12,
+  }),
+});
+if (unknownGoods.computedNetProfit !== null) fail('unknown goods cogs blocks computed net');
+if (unknownGoods.estimatedNetProfit !== null) fail('unknown goods cogs blocks exact net');
+if (!unknownGoods.warnings.includes('seller_goods_cogs_incomplete')) fail('unknown goods warning');
+
+const emptyLoaded = report({
+  orders: [],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl(),
+});
+if (emptyLoaded.estimatedNetProfit !== 0) fail('empty loaded pnl net');
+if (emptyLoaded.sellerLiability !== 0) fail('empty liability');
+if (financeReliability(emptyLoaded) !== 'complete') fail('empty connected reliability');
+
+if (financeRpcErrorKind('Could not find the function public.admin_finance_seller_pnl') !== 'missing') {
+  fail('missing rpc kind');
+}
+if (financeRpcErrorKind('PGRST202') !== 'missing') fail('pgrst202 kind');
+const fromMissing = sellerPnlFromRpc(null, 'Could not find the function public.admin_finance_seller_pnl');
+if (fromMissing.status !== 'missing' || fromMissing.pnl !== null) fail('sellerPnlFromRpc missing');
+const fromErr = sellerPnlFromRpc(null, 'timeout');
+if (fromErr.status !== 'error') fail('sellerPnlFromRpc error');
+
+const disconnected = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnlStatus: 'missing',
+});
+if (disconnected.computedNetProfit !== 8000) fail('disconnected still has working number');
+if (disconnected.estimatedNetProfit !== null) fail('missing rpc must not confirm old net');
+if (financeNetKpi(disconnected).kind !== 'unavailable') fail('missing rpc net kpi hidden');
+if (financeNetKpi(disconnected).amount != null) fail('missing rpc net amount hidden');
+if (financeReliability(disconnected) !== 'disconnected') fail('missing rpc reliability');
+if (!disconnected.warnings.includes('seller_pnl_unavailable')) fail('missing rpc warning');
+
+const rpcError = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnlStatus: 'error',
+});
+if (rpcError.estimatedNetProfit !== null) fail('rpc error must not confirm net');
+if (financeReliability(rpcError) !== 'disconnected') fail('rpc error reliability');
+
+if (sellerLiabilitySplit(-555).sellerOwes !== 555 || sellerLiabilitySplit(-555).companyOwes !== 0) {
+  fail('negative liability is seller debt');
+}
+if (sellerLiabilitySplit(120).companyOwes !== 120 || sellerLiabilitySplit(120).sellerOwes !== 0) {
+  fail('positive liability is company obligation');
+}
+
+const bd = financeProfitBreakdown(goodsIssue);
+if (bd[0].key !== 'finance.revenue' || bd[5].key !== 'finance.goodsCreditAdj' || bd[7].key !== 'finance.net') {
+  fail('breakdown order');
+}
+if (bd[5].sign !== 'plus') fail('goods credit is expense correction');
+
+if (!page.includes('FINANCE_SELLER_PNL_RPC') || !page.includes('finance.pnlDisconnected')) {
+  fail('finance page must load seller pnl');
+}
+if (page.includes('computedNetProfit')) fail('page must not render computedNetProfit');
+if (!i18n.includes("'finance.pnlDisconnected': 'Финансовый расчёт не полностью подключён'")) fail('i18n disconnected ru');
+if (!i18n.includes("'finance.pnlDisconnected': 'Қаржы есебі толық қосылмаған'")) fail('i18n disconnected kz');
+if (!i18n.includes("'finance.reliabilityComplete':") || !i18n.includes("'finance.sellerOwes':")) fail('i18n reliability');
+if (!page.includes('finance.settlements') || !page.includes('finance.payoutClasses')) fail('settlements ui');
+if (!page.includes('cityScoped') || !page.includes('finance.cityOperational')) fail('city scope must not mix company pnl');
+
+const cityMix = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  cityScoped: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 1000,
+    sellerCompensationNet: 1000,
+  }),
+});
+if (cityMix.estimatedNetProfit !== null || cityMix.computedNetProfit !== null) fail('city view must not confirm company net');
+if (cityMix.sellerCompensationNet !== 0) fail('city view must not apply company commissions');
+if (financeNetKpi(cityMix).kind !== 'unavailable') fail('city net kpi hidden');
+if (financeReliability(cityMix) !== 'city') fail('city reliability');
+if (!cityMix.warnings.includes('seller_city_scope')) fail('city scope warning');
+
+const missingRate = report({
+  orders: [paid],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({
+    commissionAccrued: 0,
+    sellerCompensationNet: 0,
+    missingRateCount: 1,
+  }),
+});
+if (missingRate.estimatedNetProfit !== null) fail('missing_rate blocks exact net');
+if (!missingRate.warnings.includes('seller_missing_rate')) fail('missing_rate warning');
+
+const zeroKnown = report({
+  orders: [paid],
+  costs: [{ id: 'p1', cost_price: 0 }],
+  expensesInputComplete: true,
+  sellerPnl: sellerPnl({ goodsZeroCostLineCount: 1, goodsCogsComplete: true }),
+});
+if (zeroKnown.cogsComplete !== true) fail('known zero sales cost is complete');
+if (zeroKnown.estimatedNetProfit !== 10000) fail('known zero cost stays in net');
+if (!zeroKnown.warnings.includes('seller_goods_zero_cost')) fail('zero goods cost warning');
+if (zeroKnown.estimatedNetProfit == null) fail('zero known goods cost must not block net');
+if (!page.includes('seller_unpaid_debt_accrual') || !page.includes('seller_missing_rate')) fail('warning copy');
 
 if (FINANCE_EXPENSE_CREATE_RPC !== 'admin_finance_expense_create') fail('create rpc name');
 if (FINANCE_EXPENSE_UPDATE_RPC !== 'admin_finance_expense_update') fail('update rpc name');
