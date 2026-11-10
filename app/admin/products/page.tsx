@@ -191,6 +191,12 @@ export default function AdminProductsPage() {
             >
               {t('productCosts.nav')}
             </Link>
+            <Link
+              href="/admin/seller-tariffs"
+              className="px-3 py-2 rounded-lg bg-blue-100 text-blue-950 text-sm font-medium"
+            >
+              {t('sellerTariffs.nav')}
+            </Link>
           </div>
 
           <div className="flex gap-2 mb-4 flex-wrap items-center">

@@ -20,6 +20,7 @@ export default function NavAdmin() {
         { href: '/admin/orders', label: t('admin.orders') },
         { href: '/admin/activity', label: t('admin.activity') },
         { href: '/admin/products', label: t('admin.products') },
+        { href: '/admin/seller-tariffs', label: t('sellerTariffs.nav') },
         { href: '/admin/locations', label: t('admin.locations') },
         { href: '/admin/losses', label: t('admin.losses') },
         { href: '/admin/users', label: t('admin.users') },
