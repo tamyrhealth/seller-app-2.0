@@ -1,6 +1,10 @@
 'use client';
 
 import { supabase } from '@/lib/supabaseClient';
+import { interpretActiveDeviceQuery, type DeviceAccess } from '@/lib/deviceAccess';
+
+export type { DeviceAccess };
+export { interpretActiveDeviceQuery };
 
 /**
  * Синхронизирует активное устройство пользователя.
@@ -24,16 +28,24 @@ export async function syncActiveSession(userId: string, deviceId: string): Promi
 
 /**
  * Проверяет, является ли текущее устройство активным для пользователя.
- * @returns true если устройство активно, false если другой device_id зарегистрирован
  */
-export async function checkActiveDevice(userId: string, deviceId: string): Promise<boolean> {
-  if (!userId || !deviceId) return false;
-  const { data, error } = await supabase
-    .from('user_active_sessions')
-    .select('device_id')
-    .eq('user_id', userId)
-    .maybeSingle();
+export async function checkActiveDevice(userId: string, deviceId: string): Promise<DeviceAccess> {
+  try {
+    if (!userId) return 'denied';
+    if (!deviceId) return 'unknown';
+    const { data, error } = await supabase
+      .from('user_active_sessions')
+      .select('device_id')
+      .eq('user_id', userId)
+      .maybeSingle();
 
-  if (error || !data) return true; // при ошибке не блокируем
-  return data.device_id === deviceId;
+    return interpretActiveDeviceQuery({
+      userId,
+      deviceId,
+      rowDeviceId: data?.device_id,
+      error: error ? { message: error.message, code: error.code } : null,
+    });
+  } catch {
+    return 'unknown';
+  }
 }
