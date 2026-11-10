@@ -14,6 +14,11 @@ export const SELLER_MY_BALANCE = 'seller_my_balance';
 export const SELLER_MY_LEDGER = 'seller_my_ledger';
 export const SELLER_CASH_PAYOUT = 'admin_seller_cash_payout';
 export const SELLER_CASH_ADVANCE = 'admin_seller_cash_advance';
+export const SELLER_GOODS_ISSUE = 'admin_seller_goods_issue';
+export const SELLER_GOODS_ADVANCE = 'admin_seller_goods_advance';
+export const SELLER_GOODS_RETURN = 'admin_seller_goods_return';
+export const SELLER_GOODS_ISSUES_LIST = 'admin_seller_goods_issues_list';
+export const SELLER_MY_GOODS_ISSUES = 'seller_my_goods_issues';
 
 export type TariffPlan = {
   id: string;
@@ -59,6 +64,38 @@ export type SellerBalanceRow = {
   goods: number;
   adjustments: number;
   balance: number;
+};
+
+export type SellerGoodsIssueItem = {
+  id?: string;
+  product_id: string;
+  product_name?: string | null;
+  qty: number;
+  unit_credit_amount: number;
+  line_credit_amount: number;
+  cost_price_snapshot: number | null;
+  line_cost_amount?: number | null;
+};
+
+export type SellerGoodsIssue = {
+  id: string;
+  issue_number: string;
+  operation_id: string;
+  seller_id: string;
+  seller_name?: string | null;
+  city_id: string;
+  city_name?: string | null;
+  credit_amount: number;
+  cost_total: number;
+  issue_kind: 'settlement' | 'advance' | string;
+  ledger_id: string | null;
+  reversed_at: string | null;
+  reversal_of: string | null;
+  actor_id: string | null;
+  comment: string | null;
+  created_at: string;
+  status: 'issued' | 'returned' | 'return' | string;
+  items: SellerGoodsIssueItem[];
 };
 
 export type SellerLedgerEntry = {
@@ -108,6 +145,62 @@ export function rpcItems<T>(payload: unknown): T[] {
   if (!payload || typeof payload !== 'object') return [];
   const items = (payload as { items?: unknown }).items;
   return Array.isArray(items) ? (items as T[]) : [];
+}
+
+export function asSellerGoodsIssue(payload: unknown): SellerGoodsIssue | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const row = payload as Record<string, unknown>;
+  if (typeof row.id !== 'string' || !row.id) return null;
+  if (typeof row.seller_id !== 'string' || !row.seller_id) return null;
+  return {
+    id: row.id,
+    issue_number: typeof row.issue_number === 'string' ? row.issue_number : '',
+    operation_id: typeof row.operation_id === 'string' ? row.operation_id : '',
+    seller_id: row.seller_id,
+    seller_name: typeof row.seller_name === 'string' ? row.seller_name : null,
+    city_id: typeof row.city_id === 'string' ? row.city_id : '',
+    city_name: typeof row.city_name === 'string' ? row.city_name : null,
+    credit_amount: asFiniteNumber(row.credit_amount),
+    cost_total: asFiniteNumber(row.cost_total),
+    issue_kind: typeof row.issue_kind === 'string' ? row.issue_kind : 'settlement',
+    ledger_id: typeof row.ledger_id === 'string' ? row.ledger_id : null,
+    reversed_at: typeof row.reversed_at === 'string' ? row.reversed_at : null,
+    reversal_of: typeof row.reversal_of === 'string' ? row.reversal_of : null,
+    actor_id: typeof row.actor_id === 'string' ? row.actor_id : null,
+    comment: typeof row.comment === 'string' ? row.comment : null,
+    created_at: typeof row.created_at === 'string' ? row.created_at : '',
+    status: typeof row.status === 'string' ? row.status : 'issued',
+    items: parseGoodsItems(row.items),
+  };
+}
+
+function parseGoodsItems(raw: unknown): SellerGoodsIssueItem[] {
+  if (!Array.isArray(raw)) return [];
+  const items: SellerGoodsIssueItem[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const line = item as Record<string, unknown>;
+    if (typeof line.product_id !== 'string' || !line.product_id) continue;
+    const parsed: SellerGoodsIssueItem = {
+      product_id: line.product_id,
+      product_name: typeof line.product_name === 'string' ? line.product_name : null,
+      qty: asFiniteNumber(line.qty),
+      unit_credit_amount: asFiniteNumber(line.unit_credit_amount),
+      line_credit_amount: asFiniteNumber(line.line_credit_amount),
+      cost_price_snapshot:
+        line.cost_price_snapshot == null ? null : asFiniteNumber(line.cost_price_snapshot),
+      line_cost_amount: line.line_cost_amount == null ? null : asFiniteNumber(line.line_cost_amount),
+    };
+    if (typeof line.id === 'string') parsed.id = line.id;
+    items.push(parsed);
+  }
+  return items;
+}
+
+export function parseQty(raw: string): ParsedTariffAmount {
+  const parsed = parseTariffAmount(raw);
+  if (parsed.kind === 'value' && parsed.value <= 0) return { kind: 'invalid' };
+  return parsed;
 }
 
 export function parseCashAmount(raw: string): ParsedTariffAmount {

@@ -35,6 +35,7 @@ export default function NavSeller() {
     { href: '/seller/preorders', label: t('nav.preorders'), bg: 'bg-amber-600' },
     { href: '/seller/debts', label: t('nav.debts'), bg: 'bg-rose-600' },
     { href: '/seller/balance', label: t('nav.balance'), bg: 'bg-emerald-700' },
+    { href: '/seller/goods', label: t('nav.goods'), bg: 'bg-teal-700' },
     { href: '/seller/inventory', label: t('nav.inventory'), bg: 'bg-blue-600' },
   ];
 
@@ -84,7 +85,7 @@ export default function NavSeller() {
           {/* Expanded panel: 2x3 grid */}
           <div
             className={`grid grid-cols-2 gap-3 transition-all duration-200 ease-out overflow-hidden ${
-              open ? 'opacity-100 max-h-[400px] mb-2' : 'opacity-0 max-h-0 mb-0 pointer-events-none'
+              open ? 'opacity-100 max-h-[520px] mb-2' : 'opacity-0 max-h-0 mb-0 pointer-events-none'
             }`}
           >
             {items.map(({ href, label, bg }) => (

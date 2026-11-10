@@ -22,6 +22,9 @@ export default function AdminSellerBalancesPage() {
             <Link href="/admin/seller-tariffs" className="text-sm text-blue-800">
               {t('sellerTariffs.nav')}
             </Link>
+            <Link href="/admin/seller-goods" className="text-sm text-blue-800">
+              {t('sellerGoods.nav')}
+            </Link>
           </div>
           {!isAdmin && profile ? <p className="text-red-700 mt-2">{t('sellerBalances.forbidden')}</p> : null}
         </div>

@@ -696,7 +696,11 @@ export default function AdminLocationsPage() {
                                     ? 'перемещение (получение)'
                                     : m.type === 'transfer_cancel'
                                       ? 'перемещение (отмена)'
-                                      : m.type;
+                                      : m.type === 'seller_goods_out'
+                                        ? 'выдача продавцу'
+                                        : m.type === 'seller_goods_in'
+                                          ? 'возврат от продавца'
+                                          : m.type;
                       return (
                         <li key={m.id}>
                           {when} · {typeLabel} · {productName} · {cityName} · {m.qty_delta} · {who}

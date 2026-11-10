@@ -14,6 +14,7 @@ export default function NavManager() {
         { href: '/manager/orders', label: t('admin.orders') },
         { href: '/manager/inventory', label: t('manager.inventory') },
         { href: '/manager/seller-balances', label: t('sellerBalances.nav') },
+        { href: '/manager/seller-goods', label: t('sellerGoods.nav') },
         { href: '/manager/assistant', label: t('admin.assistant') },
       ]}
     />

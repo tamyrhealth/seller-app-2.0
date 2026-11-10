@@ -75,6 +75,9 @@ export default function SellerBalancePage() {
             <Link href="/seller/debts" className="text-sm text-blue-800">
               {t('nav.debts')}
             </Link>
+            <Link href="/seller/goods" className="text-sm text-blue-800">
+              {t('nav.goods')}
+            </Link>
           </div>
           <p className="text-sm text-slate-700 mb-3">{t('sellerBalances.sellerHint')}</p>
           {message ? <p className="text-sm text-red-700 mb-3">{message}</p> : null}
