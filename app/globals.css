@@ -32,6 +32,7 @@
 html {
   color-scheme: light;
   background-color: #ffffff;
+  overflow-x: hidden;
 }
 
 body {
@@ -39,4 +40,59 @@ body {
   background: var(--background) !important;
   color: var(--foreground) !important;
   font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+  max-width: 100%;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.table-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.table-scroll-hint {
+  display: none;
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: #64748b;
+}
+
+@media (max-width: 1023px) {
+  .table-scroll-hint {
+    display: block;
+  }
+}
+
+.table-scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  max-width: 100%;
+}
+
+.table-scroll-inner {
+  width: max-content;
+  min-width: 100%;
+}
+
+.table-scroll-inner table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.table-scroll-sticky-first th:first-child,
+.table-scroll-sticky-first td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #ffffff;
+}
+
+.app-shell-chat {
+  height: var(--app-vvh, 100dvh);
+  max-height: var(--app-vvh, 100dvh);
 }

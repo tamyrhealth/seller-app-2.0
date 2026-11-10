@@ -361,7 +361,7 @@ if (formatYmdDmy('2026-11-08') !== '08.11.2026') fail('DD.MM.YYYY');
 if (formatInstantDmy('2026-11-07T21:00:00.000Z') !== '08.11.2026') fail('Almaty calendar date');
 if (!i18n.includes("'common.debt': 'Долг'") || !i18n.includes("'common.debt': 'Қарыз'")) fail('debt i18n');
 if (!page.includes("role=\"admin\"")) fail('role admin');
-if (!nav.includes('href="/admin/customers"')) fail('nav customers');
+if (!nav.includes("/admin/customers")) fail('nav customers');
 if (managerNav.includes('/admin/customers')) fail('manager must not see customers');
 if (!i18n.includes("'customers.nav': 'Клиенты'") || !i18n.includes("'customers.nav': 'Клиенттер'")) fail('i18n nav');
 const keys = [...i18n.matchAll(/'(customers\.[^']+)':/g)].map((m) => m[1]);

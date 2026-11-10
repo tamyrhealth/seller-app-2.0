@@ -1,129 +1,30 @@
 'use client';
 
-import Link from 'next/link';
-import { useAuth } from '@/lib/auth';
+import AppNav from '@/components/AppNav';
 import { useTranslation } from '@/lib/i18n';
 
 export default function NavAdmin() {
-  const { signOut } = useAuth();
-  const { lang, setLang, t } = useTranslation();
+  const { t } = useTranslation();
 
   return (
-    <nav className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-2 items-center">
-      <Link
-        href="/admin"
-        className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium"
-      >
-        {t('admin.dashboard')}
-      </Link>
-      <Link
-        href="/admin/stats"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('stats.nav')}
-      </Link>
-      <Link
-        href="/admin/finance"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('finance.nav')}
-      </Link>
-      <Link
-        href="/admin/customers"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('customers.nav')}
-      </Link>
-      <Link
-        href="/admin/abc"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('abc.nav')}
-      </Link>
-      <Link
-        href="/admin/forecast"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('forecast.nav')}
-      </Link>
-      <Link
-        href="/admin/map"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('map.nav')}
-      </Link>
-      <Link
-        href="/admin/new-order"
-        className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
-      >
-        Новый заказ
-      </Link>
-      <Link
-        href="/admin/orders"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.orders')}
-      </Link>
-      <Link
-        href="/admin/activity"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.activity')}
-      </Link>
-      <Link
-        href="/admin/products"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.products')}
-      </Link>
-      <Link
-        href="/admin/locations"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.locations')}
-      </Link>
-      <Link
-        href="/admin/losses"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.losses')}
-      </Link>
-      <Link
-        href="/admin/users"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.users')}
-      </Link>
-      <Link
-        href="/admin/assistant"
-        className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg font-medium hover:bg-gray-300"
-      >
-        {t('admin.assistant')}
-      </Link>
-      <div className="ml-auto flex items-center gap-2">
-        <div className="flex rounded-full border border-gray-300 bg-white text-sm">
-          <button
-            type="button"
-            onClick={() => setLang('kz')}
-            className={`px-3 py-1.5 rounded-l-full ${lang === 'kz' ? 'bg-gray-300 text-gray-900' : 'text-gray-600 bg-white'}`}
-          >
-            KZ
-          </button>
-          <button
-            type="button"
-            onClick={() => setLang('ru')}
-            className={`px-3 py-1.5 rounded-r-full border-l border-gray-300 ${lang === 'ru' ? 'bg-gray-300 text-gray-900' : 'text-gray-600 bg-white'}`}
-          >
-            RU
-          </button>
-        </div>
-        <button
-          onClick={() => signOut()}
-          className="px-4 py-2 bg-red-600 text-white rounded-lg font-medium"
-        >
-          {t('admin.logout')}
-        </button>
-      </div>
-    </nav>
+    <AppNav
+      items={[
+        { href: '/admin', label: t('admin.dashboard'), tone: 'primary' },
+        { href: '/admin/stats', label: t('stats.nav') },
+        { href: '/admin/finance', label: t('finance.nav') },
+        { href: '/admin/customers', label: t('customers.nav') },
+        { href: '/admin/abc', label: t('abc.nav') },
+        { href: '/admin/forecast', label: t('forecast.nav') },
+        { href: '/admin/map', label: t('map.nav') },
+        { href: '/admin/new-order', label: t('admin.newOrder'), tone: 'success' },
+        { href: '/admin/orders', label: t('admin.orders') },
+        { href: '/admin/activity', label: t('admin.activity') },
+        { href: '/admin/products', label: t('admin.products') },
+        { href: '/admin/locations', label: t('admin.locations') },
+        { href: '/admin/losses', label: t('admin.losses') },
+        { href: '/admin/users', label: t('admin.users') },
+        { href: '/admin/assistant', label: t('admin.assistant') },
+      ]}
+    />
   );
 }

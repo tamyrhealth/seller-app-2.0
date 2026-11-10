@@ -34,6 +34,24 @@ export default function ClientUiStability() {
   }, []);
 
   useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => {
+      const vv = window.visualViewport;
+      const height = vv?.height ?? window.innerHeight;
+      root.style.setProperty('--app-vvh', `${Math.round(height)}px`);
+    };
+    sync();
+    window.visualViewport?.addEventListener('resize', sync);
+    window.visualViewport?.addEventListener('scroll', sync);
+    window.addEventListener('resize', sync);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', sync);
+      window.visualViewport?.removeEventListener('scroll', sync);
+      window.removeEventListener('resize', sync);
+    };
+  }, []);
+
+  useEffect(() => {
     const onPop = () => {
       skipRestoreRef.current = true;
     };

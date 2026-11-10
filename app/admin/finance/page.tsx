@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 import { getTodayLocalISO } from '@/lib/datetime';
@@ -708,7 +709,7 @@ export default function AdminFinancePage() {
                   {report.expensesByCategory.length === 0 ? (
                     <p className="text-sm text-slate-500">{t('finance.emptyExpenses')}</p>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <TableScroll>
                       <table className="w-full min-w-[320px] text-left text-sm">
                         <thead className="text-xs text-slate-500">
                           <tr>
@@ -725,7 +726,7 @@ export default function AdminFinancePage() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </TableScroll>
                   )}
                 </Section>
 
@@ -760,7 +761,7 @@ export default function AdminFinancePage() {
                 {report.cityRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('finance.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <TableScroll>
                     <table className="w-full min-w-[520px] text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
@@ -791,7 +792,7 @@ export default function AdminFinancePage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
 
@@ -820,7 +821,7 @@ export default function AdminFinancePage() {
                 {sellerRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('finance.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <TableScroll>
                     <table className="w-full min-w-[640px] text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
@@ -853,7 +854,7 @@ export default function AdminFinancePage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
 
@@ -861,7 +862,7 @@ export default function AdminFinancePage() {
                 {report.productRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('finance.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <TableScroll>
                     <table className="w-full min-w-[520px] text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
@@ -888,7 +889,7 @@ export default function AdminFinancePage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
 
@@ -979,7 +980,7 @@ export default function AdminFinancePage() {
                 {journal.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('finance.emptyExpenses')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <TableScroll>
                     <table className="w-full min-w-[640px] text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
@@ -1027,7 +1028,7 @@ export default function AdminFinancePage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
                 {historyId ? (
                   <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm">
@@ -1115,7 +1116,7 @@ export default function AdminFinancePage() {
                   {receivables.unpaidDebtBySellerCity.length === 0 ? (
                     <p className="text-sm text-amber-900">{t('finance.receivablesEmpty')}</p>
                   ) : (
-                    <div className="overflow-x-auto rounded-2xl border border-amber-100 bg-white">
+                    <TableScroll className="rounded-2xl border border-amber-100 bg-white">
                       <table className="w-full min-w-[520px] text-left text-sm">
                         <thead className="text-xs text-slate-500">
                           <tr>
@@ -1142,7 +1143,7 @@ export default function AdminFinancePage() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </TableScroll>
                   )}
                 </div>
               )}

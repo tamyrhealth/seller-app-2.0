@@ -33,6 +33,7 @@ export default function NavSeller() {
     { href: '/seller/new-order', label: t('nav.newOrder'), bg: 'bg-green-600' },
     { href: '/seller/orders', label: t('nav.orders'), bg: 'bg-gray-600' },
     { href: '/seller/preorders', label: t('nav.preorders'), bg: 'bg-amber-600' },
+    { href: '/seller/debts', label: t('nav.debts'), bg: 'bg-rose-600' },
     { href: '/seller/inventory', label: t('nav.inventory'), bg: 'bg-blue-600' },
   ];
 
@@ -129,22 +130,23 @@ export default function NavSeller() {
         />
       )}
 
-      {/* Mobile: lang switcher - in top-right of screen or inside FAB area; keep minimal */}
-      <div className="md:hidden fixed top-2 right-2 z-50 flex gap-0 rounded-full border border-gray-300 bg-white shadow text-xs">
-        <button
-          type="button"
-          onClick={() => setLang('kz')}
-          className={`px-2.5 py-1.5 rounded-l-full ${lang === 'kz' ? 'bg-gray-300 text-gray-900' : ''}`}
-        >
-          KZ
-        </button>
-        <button
-          type="button"
-          onClick={() => setLang('ru')}
-          className={`px-2.5 py-1.5 rounded-r-full border-l border-gray-300 ${lang === 'ru' ? 'bg-gray-300 text-gray-900' : ''}`}
-        >
-          RU
-        </button>
+      <div className="md:hidden sticky top-0 z-30 flex items-center justify-end border-b border-gray-200 bg-white px-3 py-1.5 pt-[max(0.35rem,env(safe-area-inset-top))]">
+        <div className="flex gap-0 rounded-full border border-gray-300 bg-white text-xs">
+          <button
+            type="button"
+            onClick={() => setLang('kz')}
+            className={`px-2.5 py-1.5 rounded-l-full ${lang === 'kz' ? 'bg-gray-300 text-gray-900' : ''}`}
+          >
+            KZ
+          </button>
+          <button
+            type="button"
+            onClick={() => setLang('ru')}
+            className={`px-2.5 py-1.5 rounded-r-full border-l border-gray-300 ${lang === 'ru' ? 'bg-gray-300 text-gray-900' : ''}`}
+          >
+            RU
+          </button>
+        </div>
       </div>
     </>
   );

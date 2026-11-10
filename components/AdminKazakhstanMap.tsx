@@ -13,6 +13,7 @@ import {
   type MapSeller,
 } from '@/lib/adminMap';
 import { MAP_TRUCK_DURATION_SEC, transferRouteArc, type MapTransferGroup } from '@/lib/adminMapTransfers';
+import CollapsibleFilters from '@/components/CollapsibleFilters';
 
 type Lang = 'ru' | 'kz';
 
@@ -296,29 +297,33 @@ export default function AdminKazakhstanMap({
 
   return (
     <div className="relative h-full min-h-[22rem] overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-      <div className="absolute left-3 top-3 z-10 flex flex-col gap-1 rounded-xl border border-slate-200 bg-white/95 p-2 text-xs shadow-sm">
-        <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
-          <input
-            type="checkbox"
-            checked={showWarehouses}
-            onChange={(e) => onToggleWarehouses(e.target.checked)}
-          />
-          {t('map.layerWarehouses')}
-        </label>
-        <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
-          <input type="checkbox" checked={showTransfers} onChange={(e) => onToggleTransfers(e.target.checked)} />
-          {t('map.layerTransfers')}
-        </label>
-        <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
-          <input
-            type="checkbox"
-            checked={animateTrucks}
-            disabled={!showTransfers}
-            onChange={(e) => setAnimateTrucks(e.target.checked)}
-          />
-          {t('map.layerAnimation')}
-        </label>
-        <p className="max-w-[11rem] px-1 pt-0.5 leading-snug text-slate-500">{t('map.animationHint')}</p>
+      <div className="absolute left-3 top-3 z-10 max-w-[calc(100%-5.5rem)]">
+        <CollapsibleFilters>
+          <div className="flex flex-col gap-1 rounded-xl border border-slate-200 bg-white/95 p-2 text-xs shadow-sm">
+            <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
+              <input
+                type="checkbox"
+                checked={showWarehouses}
+                onChange={(e) => onToggleWarehouses(e.target.checked)}
+              />
+              {t('map.layerWarehouses')}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
+              <input type="checkbox" checked={showTransfers} onChange={(e) => onToggleTransfers(e.target.checked)} />
+              {t('map.layerTransfers')}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-slate-700">
+              <input
+                type="checkbox"
+                checked={animateTrucks}
+                disabled={!showTransfers}
+                onChange={(e) => setAnimateTrucks(e.target.checked)}
+              />
+              {t('map.layerAnimation')}
+            </label>
+            <p className="max-w-[11rem] px-1 pt-0.5 leading-snug text-slate-500">{t('map.animationHint')}</p>
+          </div>
+        </CollapsibleFilters>
       </div>
       <svg
         ref={svgRef}
@@ -547,7 +552,7 @@ export default function AdminKazakhstanMap({
           })}
         </g>
       </svg>
-      <div className="absolute bottom-3 right-3 flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3 z-10 flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <button
           type="button"
           className="px-3 py-2 text-lg text-slate-700 hover:bg-slate-50"

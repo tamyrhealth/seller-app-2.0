@@ -898,7 +898,7 @@ if (!page.includes('finance.noSeller') || !page.includes('finance.bySellerHint')
 if (!page.includes('finance.sellerGross')) fail('seller gross label');
 if (!page.includes('LineChart')) fail('daily chart from existing data');
 if (page.includes('lucide')) fail('no new icon library');
-if (!nav.includes('href="/admin/finance"') || !nav.includes("t('finance.nav')")) fail('nav finance');
+if (!nav.includes("/admin/finance") || !nav.includes("t('finance.nav')")) fail('nav finance');
 if (managerNav.includes('/admin/finance')) fail('manager must not get finance nav');
 if (!i18n.includes("'finance.nav': 'Финансы'") || !i18n.includes("'finance.nav': 'Қаржы'")) fail('i18n nav');
 if (!i18n.includes("'finance.revenue': 'Признанная выручка'") || !i18n.includes("'finance.revenue': 'Мойындалған түсім'")) {

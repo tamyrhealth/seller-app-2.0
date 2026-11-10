@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 import { formatQtyByUnit } from '@/lib/adminStats';
@@ -194,7 +195,7 @@ export default function AdminLossesPage() {
           ) : filtered.length === 0 ? (
             <p className="text-sm text-gray-600">Недостач за выбранный период нет</p>
           ) : (
-            <div className="overflow-x-auto">
+            <TableScroll minWidth="40rem">
               <table className="min-w-full text-sm text-left text-gray-900">
                 <thead>
                   <tr className="border-b border-gray-300">
@@ -231,7 +232,7 @@ export default function AdminLossesPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </div>
       </div>

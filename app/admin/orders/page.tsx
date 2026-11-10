@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import { supabase } from '@/lib/supabaseClient';
 import {
   getAccountingDate,
@@ -689,7 +690,7 @@ export default function AdminOrdersPage() {
           {loading ? (
             <p className="text-gray-900">{t('common.loading')}</p>
           ) : (
-            <div className="border border-gray-200 rounded-lg overflow-x-auto w-full">
+            <TableScroll className="rounded-lg border border-gray-200" minWidth="40rem">
               <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-gray-100 text-gray-900">
                   <tr>
@@ -787,7 +788,7 @@ export default function AdminOrdersPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
 
           {selectedId && !detailLoading && detailError && !orderDetail && (

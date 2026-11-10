@@ -140,6 +140,6 @@ if (!i18n.includes("'admin.todaySubtitle': 'Показатели за сегод
 if (!i18n.includes("'admin.todaySubtitle': 'Бүгінгі көрсеткіштер'")) fail('kz subtitle');
 
 const nav = read('components/NavAdmin.tsx');
-if (!nav.includes('href="/admin"')) fail('nav home link must remain');
+if (!nav.includes("href: '/admin'") && !nav.includes('href="/admin"')) fail('nav home link must remain');
 
 console.log('admin-dashboard checks ok');

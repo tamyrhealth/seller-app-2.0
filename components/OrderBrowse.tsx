@@ -9,6 +9,7 @@ import type { City, Order, Profile } from '@/lib/types';
 import { orderCustomerDisplay } from '@/lib/orderCustomer';
 import { useAuth } from '@/lib/auth';
 import { useUserUiState } from '@/lib/useUserUiState';
+import TableScroll from '@/components/TableScroll';
 
 function formatMoney(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -191,7 +192,7 @@ export default function OrderBrowse() {
       ) : orders.length === 0 ? (
         <p className="text-gray-600">{t('orders.noData')}</p>
       ) : (
-        <div className="border border-gray-200 rounded-lg overflow-x-auto w-full">
+        <TableScroll className="rounded-lg border border-gray-200" minWidth="40rem">
           <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-gray-100 text-gray-900">
               <tr>
@@ -236,7 +237,7 @@ export default function OrderBrowse() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
 
       {detail && (

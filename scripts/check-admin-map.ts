@@ -216,7 +216,7 @@ if (!page.includes('formatForecastQty(item.remaining') || page.includes('group.r
 if (!page.includes('mapTransfersForDisplay') || !page.includes('map.statusPartial')) {
   fail('unreliable overlay hidden; statuses translated');
 }
-if (!nav.includes('href="/admin/map"')) fail('nav');
+if (!nav.includes("/admin/map")) fail('nav');
 if (managerNav.includes('/admin/map') || sellerNav.includes('/admin/map')) fail('staff nav leak');
 if (!i18n.includes("'map.nav': 'Карта'")) fail('i18n nav');
 const keys = [...i18n.matchAll(/'(map\.[^']+)':/g)].map((m) => m[1]);

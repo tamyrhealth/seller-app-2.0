@@ -354,7 +354,7 @@ export default function AdminUsersPage() {
               {profiles.map((p) => (
                 <div
                   key={p.id}
-                  className="flex justify-between items-center p-4 bg-gray-100 rounded-lg"
+                  className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center p-4 bg-gray-100 rounded-lg"
                 >
                   <div>
                     <p className="font-medium text-gray-900">
@@ -378,7 +378,7 @@ export default function AdminUsersPage() {
                         can_manage_transfers: p.can_manage_transfers === true,
                       });
                     }}
-                    className="px-3 py-1 bg-blue-600 text-white rounded text-sm"
+                    className="shrink-0 self-start px-3 py-1 bg-blue-600 text-white rounded text-sm"
                   >
                     Редактировать
                   </button>

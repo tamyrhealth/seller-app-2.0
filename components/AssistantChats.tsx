@@ -839,7 +839,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
               ) : null}
             </div>
             {!readOnly && (
-              <div className="shrink-0 border-t border-gray-100 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2">
+              <div className="shrink-0 border-t border-gray-100 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2 bg-white">
                 {error ? <p className="text-sm text-red-700">{error}</p> : null}
                 {retry ? (
                   <button

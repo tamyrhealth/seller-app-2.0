@@ -469,7 +469,7 @@ if (page.includes('console.log')) fail('page must not log');
 if (page.includes('/api/')) fail('no public abc API');
 if (!page.includes('abcCogsHintKey')) fail('cogs quality labels');
 if (!page.includes('abc.truncated')) fail('truncated copy');
-if (!nav.includes('href="/admin/abc"') || !nav.includes("t('abc.nav')")) fail('nav abc');
+if (!nav.includes("/admin/abc") || !nav.includes("t('abc.nav')")) fail('nav abc');
 if (managerNav.includes('/admin/abc')) fail('manager must not see abc');
 if (sellerNav.includes('/admin/abc')) fail('seller must not see abc');
 if (page.includes(', t]')) fail('language switch must not refetch orders');

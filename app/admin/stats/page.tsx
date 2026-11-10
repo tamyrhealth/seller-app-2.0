@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 import { addDaysYmd } from '@/lib/datetime';
@@ -393,7 +394,7 @@ export default function AdminStatsPage() {
               </ChartCard>
 
               <h2 className="font-bold text-gray-900 mb-2">{t('stats.sellerRanking')}</h2>
-              <div className="border border-gray-200 rounded-xl overflow-x-auto mb-6">
+              <TableScroll className="mb-6 rounded-xl border border-gray-200" minWidth="40rem">
                 <table className="w-full min-w-[640px] text-sm">
                   <thead className="bg-gray-100">
                     <tr>
@@ -447,10 +448,10 @@ export default function AdminStatsPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
 
               <h2 className="font-bold text-gray-900 mb-2">{t('stats.productStats')}</h2>
-              <div className="border border-gray-200 rounded-xl overflow-x-auto mb-6">
+              <TableScroll className="mb-6 rounded-xl border border-gray-200" minWidth="40rem">
                 <table className="w-full min-w-[520px] text-sm">
                   <thead className="bg-gray-100">
                     <tr>
@@ -476,7 +477,7 @@ export default function AdminStatsPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
 
               <h2 className="font-bold text-gray-900 mb-2">{t('stats.debtAnalytics')}</h2>
               <p className="text-xs text-gray-500 mb-2">{t('stats.debtNote')}</p>

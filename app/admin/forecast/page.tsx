@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import {
   buildAdminForecast,
   filterForecastRows,
@@ -375,8 +376,8 @@ export default function AdminForecastPage() {
                 {!recOk || transferRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{recOk ? t('forecast.noTransfers') : t('forecast.recsHidden')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
+                  <TableScroll minWidth="52rem" stickyFirst>
+                    <table className="border-separate border-spacing-0 text-sm">
                       <thead>
                         <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                           <th className="sticky left-0 z-10 whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">
@@ -410,7 +411,7 @@ export default function AdminForecastPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
 
@@ -418,8 +419,8 @@ export default function AdminForecastPage() {
                 {tableRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('forecast.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
+                  <TableScroll minWidth="72rem" stickyFirst>
+                    <table className="border-separate border-spacing-0 text-sm">
                       <thead>
                         <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                           <th className="sticky left-0 z-10 min-w-[11rem] whitespace-nowrap border-b border-slate-200 bg-white px-3 py-3 text-left">
@@ -514,7 +515,7 @@ export default function AdminForecastPage() {
                         })}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
             </>

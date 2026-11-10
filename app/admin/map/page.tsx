@@ -297,7 +297,7 @@ export default function AdminMapPage() {
     <Protected role="admin">
       <div className="min-h-screen bg-slate-50">
         <NavAdmin />
-        <main className="mx-auto flex max-w-7xl flex-col gap-3 p-4 pb-32 lg:pb-6">
+        <main className="mx-auto flex max-w-7xl flex-col gap-3 p-4 pb-8 lg:pb-6">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{t('map.title')}</h1>
             <p className="mt-1 text-sm text-slate-500">{t('map.subtitle')}</p>

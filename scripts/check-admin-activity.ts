@@ -132,7 +132,7 @@ if (!page.includes('admin.activityEmpty') || !page.includes('admin.activityError
   fail('loading/empty/error states');
 }
 if (!page.includes('admin.activityOpenOrder')) fail('link to order');
-if (!nav.includes('href="/admin/activity"')) fail('nav link');
+if (!nav.includes("/admin/activity")) fail('nav link');
 if (!i18n.includes("'admin.activityTitle': 'История действий с заказами'")) fail('ru title');
 if (!i18n.includes("'admin.activityTitle': 'Тапсырыс әрекеттерінің тарихы'")) fail('kz title');
 if (!helper.includes('.order(') || !helper.includes('.range(')) fail('order then range pagination');

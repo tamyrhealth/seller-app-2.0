@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/auth';
 import { useTranslation } from '@/lib/i18n';
@@ -325,7 +326,7 @@ export default function AdminProductCostsPage() {
           {loading ? (
             <p className="text-gray-900">{t('admin.activityLoading')}</p>
           ) : (
-            <div className="overflow-x-auto border border-gray-200 rounded-lg mb-4">
+            <TableScroll className="mb-4 rounded-lg border border-gray-200" minWidth="48rem" stickyFirst>
               <table className="min-w-full text-sm text-gray-900">
                 <thead className="bg-gray-100">
                   <tr>
@@ -369,7 +370,7 @@ export default function AdminProductCostsPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
 
           <div className="flex flex-wrap gap-2 items-center mb-3">
@@ -394,7 +395,7 @@ export default function AdminProductCostsPage() {
               {changes.length === 0 ? (
                 <p className="text-sm text-gray-700">{t('productCosts.noChanges')}</p>
               ) : (
-                <div className="overflow-x-auto mb-3">
+                <TableScroll className="mb-3" minWidth="36rem">
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr className="text-left text-gray-600">
@@ -413,7 +414,7 @@ export default function AdminProductCostsPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableScroll>
               )}
               {invalid.length > 0 ? (
                 <ul className="text-sm text-red-700 list-disc pl-5 mb-2">

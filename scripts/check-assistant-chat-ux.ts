@@ -142,7 +142,7 @@ if (chatsUi.includes('rehype-raw')) fail('must not parse raw HTML from the model
 
 const adminAssistant = readFileSync(join(process.cwd(), 'app', 'admin', 'assistant', 'page.tsx'), 'utf8');
 const managerAssistant = readFileSync(join(process.cwd(), 'app', 'manager', 'assistant', 'page.tsx'), 'utf8');
-if (!adminAssistant.includes('h-dvh') || !managerAssistant.includes('h-dvh')) {
+if (!adminAssistant.includes('app-shell-chat') || !managerAssistant.includes('app-shell-chat')) {
   fail('assistant pages must lock to the dynamic viewport height');
 }
 if (!adminAssistant.includes('min-h-0') || !managerAssistant.includes('min-h-0')) {

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import {
   buildAdminCustomers,
   filterCustomerRows,
@@ -441,7 +442,7 @@ export default function AdminCustomersPage() {
                 {built.byCity.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('customers.empty')}</p>
                 ) : (
-                  <div className="-mx-4 overflow-x-auto px-4">
+                  <TableScroll minWidth="48rem" stickyFirst>
                     <table className="w-full min-w-[480px] border-separate border-spacing-0 text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
@@ -464,7 +465,7 @@ export default function AdminCustomersPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
 
@@ -495,7 +496,7 @@ export default function AdminCustomersPage() {
                 {tableRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('customers.empty')}</p>
                 ) : (
-                  <div className="-mx-4 overflow-x-auto px-4">
+                  <TableScroll minWidth="48rem" stickyFirst>
                     <table className="w-full min-w-[860px] border-separate border-spacing-0 text-left text-sm">
                       <thead className="text-xs text-slate-500">
                         <tr>
@@ -536,7 +537,7 @@ export default function AdminCustomersPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
 
@@ -610,7 +611,7 @@ export default function AdminCustomersPage() {
                             </ul>
                           )}
                         </div>
-                        <div className="-mx-4 overflow-x-auto px-4">
+                        <TableScroll minWidth="48rem" stickyFirst>
                           <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
                             <thead className="text-xs text-slate-500">
                               <tr>
@@ -635,7 +636,7 @@ export default function AdminCustomersPage() {
                               ))}
                             </tbody>
                           </table>
-                        </div>
+                        </TableScroll>
                       </div>
                     </div>
                   </aside>

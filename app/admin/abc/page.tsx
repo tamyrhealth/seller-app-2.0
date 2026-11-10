@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
+import TableScroll from '@/components/TableScroll';
 import { buildAdminAbc, type AbcCatalogFilter, type AbcMode, type AbcProductRow } from '@/lib/adminAbc';
 import {
   abcCogsHintKey,
@@ -485,8 +486,8 @@ export default function AdminAbcPage() {
                 {tableRows.length === 0 ? (
                   <p className="text-sm text-slate-500">{t('abc.empty')}</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
+                  <TableScroll minWidth="56rem" stickyFirst>
+                    <table className="text-left text-sm">
                       <thead className="text-xs uppercase tracking-wide text-slate-500">
                         <tr>
                           <th className="whitespace-nowrap px-2 py-2">{t('common.product')}</th>
@@ -525,7 +526,7 @@ export default function AdminAbcPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 )}
               </Section>
             </>
