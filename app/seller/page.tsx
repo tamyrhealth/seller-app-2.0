@@ -130,6 +130,12 @@ export default function SellerPage() {
             >
               {t('nav.inventory')}
             </Link>
+            <Link
+              href="/seller/balance"
+              className="p-3 sm:p-6 bg-emerald-700 text-white rounded-xl text-center font-bold text-sm sm:text-lg min-w-0 break-words"
+            >
+              {t('nav.balance')}
+            </Link>
           </div>
 
           <div className="bg-gray-100 rounded-xl p-3 sm:p-4">

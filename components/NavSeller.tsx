@@ -34,6 +34,7 @@ export default function NavSeller() {
     { href: '/seller/orders', label: t('nav.orders'), bg: 'bg-gray-600' },
     { href: '/seller/preorders', label: t('nav.preorders'), bg: 'bg-amber-600' },
     { href: '/seller/debts', label: t('nav.debts'), bg: 'bg-rose-600' },
+    { href: '/seller/balance', label: t('nav.balance'), bg: 'bg-emerald-700' },
     { href: '/seller/inventory', label: t('nav.inventory'), bg: 'bg-blue-600' },
   ];
 

@@ -13,6 +13,7 @@ export default function NavManager() {
         { href: '/manager/new-order', label: t('admin.newOrder'), tone: 'success' },
         { href: '/manager/orders', label: t('admin.orders') },
         { href: '/manager/inventory', label: t('manager.inventory') },
+        { href: '/manager/seller-balances', label: t('sellerBalances.nav') },
         { href: '/manager/assistant', label: t('admin.assistant') },
       ]}
     />

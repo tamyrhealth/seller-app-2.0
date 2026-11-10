@@ -197,6 +197,12 @@ export default function AdminProductsPage() {
             >
               {t('sellerTariffs.nav')}
             </Link>
+            <Link
+              href="/admin/seller-balances"
+              className="px-3 py-2 rounded-lg bg-emerald-100 text-emerald-950 text-sm font-medium"
+            >
+              {t('sellerBalances.nav')}
+            </Link>
           </div>
 
           <div className="flex gap-2 mb-4 flex-wrap items-center">
