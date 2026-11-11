@@ -151,7 +151,6 @@ export default function SellerDebtsPage() {
     phone = phone ? phone.toString().trim() : '';
 
     if (!phone) {
-      // Если телефона нет — спросим у пользователя
       const entered = window.prompt(
         'Телефон не найден в долге. Введите телефон клиента, чтобы закрыть долг:',
         ''
@@ -162,91 +161,21 @@ export default function SellerDebtsPage() {
         return;
       }
       phone = entered.trim();
-      const { error: phoneErr } = await supabase
-        .from('orders')
-        .update({
-          debt_customer_phone: phone,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', orderId);
-      if (phoneErr) {
-        setPayingId(null);
-        setError(phoneErr.message);
-        return;
-      }
     }
 
     const method = (paymentMethod && paymentMethod.trim() ? paymentMethod.trim() : 'cash') as string;
     const normalizedMethod = method === 'cash' || method === 'kaspi' ? method : 'cash';
 
-    // Перед RPC: страховка — для старых записей (payment_type='debt', is_debt=false) ставим is_debt=true
-    if ((order as Order & { payment_type?: string }).payment_type === 'debt' && order.is_debt !== true) {
-      const { error: fixErr } = await supabase
-        .from('orders')
-        .update({ is_debt: true, updated_at: new Date().toISOString() })
-        .eq('id', orderId)
-        .eq('payment_type', 'debt');
-      if (fixErr) {
-        setPayingId(null);
-        setError(fixErr.message);
-        return;
-      }
-    } else if (order.is_debt !== true) {
-      // Дополнительно: если всё ещё не долг — проставить is_debt, debt_status, телефон
-      const { error: fixErr } = await supabase
-        .from('orders')
-        .update({
-          is_debt: true,
-          debt_status: order.debt_status && order.debt_status !== 'paid' ? order.debt_status : 'active',
-          debt_customer_phone: phone,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', orderId);
-      if (fixErr) {
-        setPayingId(null);
-        setError(fixErr.message);
-        return;
-      }
-    }
-
-    const { error: rpcError } = await supabase.rpc('mark_debt_paid', {
+    const { error: rpcError } = await supabase.rpc('complete_seller_debt_pay', {
       p_order_id: orderId,
       p_payment_method: normalizedMethod,
+      p_customer_phone: phone || null,
     });
 
+    setPayingId(null);
     if (rpcError) {
-      // Fallback: прямой update, если RPC падает (например "Order is not a debt" для старых записей)
-      if (rpcError.message?.includes('Order is not a debt')) {
-        const { error: updErr } = await supabase
-          .from('orders')
-          .update({
-            debt_status: 'paid',
-            debt_paid_at: new Date().toISOString(),
-            debt_payment_method: normalizedMethod,
-            payment_type: normalizedMethod,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', orderId);
-        setPayingId(null);
-        if (updErr) {
-          setError(updErr.message);
-          return;
-        }
-      } else {
-        setPayingId(null);
-        setError(rpcError.message);
-        return;
-      }
-    } else {
-      setPayingId(null);
-      // RPC не обновляет payment_type — дополнительный update
-      await supabase
-        .from('orders')
-        .update({
-          payment_type: normalizedMethod,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', orderId);
+      setError(rpcError.message);
+      return;
     }
 
     setOrders((prev) =>
