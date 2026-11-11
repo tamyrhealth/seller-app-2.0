@@ -9,6 +9,7 @@ export type ForecastConfidence = 'high' | 'medium' | 'low';
 export type ForecastOrderItem = {
   product_id?: string | null;
   qty?: number | null;
+  qty_reserved?: number | null;
   is_gift?: boolean | null;
   product_name_snapshot?: string | null;
   product?: { name?: string | null; unit?: string | null } | { name?: string | null; unit?: string | null }[] | null;
@@ -394,11 +395,16 @@ export function buildAdminForecast(input: {
   for (const order of orders) {
     const cityId = order.city_id || '__none__';
     if (isPendingPreorder(order)) {
-      for (const [productId, qty] of orderQtyByProduct(order)) {
-        const meta = (order.order_items || []).find((i) => itemMeta(i).productId === productId);
-        const hint = meta ? itemMeta(meta) : undefined;
-        const row = ensure(productId, cityId, hint);
-        row.reserve = qty3(row.reserve + qty);
+      for (const item of order.order_items || []) {
+        const qty = Number(item.qty ?? 0);
+        if (!(qty > 0)) continue;
+        const meta = itemMeta(item);
+        const row = ensure(meta.productId, cityId, meta);
+        const reserved =
+          item.qty_reserved == null || String(item.qty_reserved).trim() === ''
+            ? qty
+            : Math.min(qty, Math.max(0, Number(item.qty_reserved) || 0));
+        row.reserve = qty3(row.reserve + reserved);
       }
       continue;
     }

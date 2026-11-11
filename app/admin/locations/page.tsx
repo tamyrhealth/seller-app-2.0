@@ -9,6 +9,7 @@ import {
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import TransfersPanel from '@/components/TransfersPanel';
+import PreorderDemandPanel from '@/components/PreorderDemandPanel';
 import { supabase } from '@/lib/supabaseClient';
 import { PRODUCT_CATALOG_SELECT, type City, type Product } from '@/lib/types';
 
@@ -17,6 +18,7 @@ interface InventoryRow {
   product_id: string;
   product_name: string;
   qty_on_hand: number;
+  qty_reserved: number;
   low_stock_threshold: number;
 }
 
@@ -133,10 +135,10 @@ export default function AdminLocationsPage() {
   async function loadInventoryAll() {
     const { data } = await supabase
       .from('inventory')
-      .select('city_id, product_id, qty_on_hand, products(name)');
+      .select('city_id, product_id, qty_on_hand, qty_reserved, products(name)');
 
     const activeCityIds = new Set(cities.filter((c) => c.is_active !== false).map((c) => c.id));
-    const map = new Map<string, { product_name: string; qty_on_hand: number }>();
+    const map = new Map<string, { product_name: string; qty_on_hand: number; qty_reserved: number }>();
 
     for (const row of data || []) {
       if (cities.length > 0 && !activeCityIds.has(row.city_id as string)) continue;
@@ -144,11 +146,13 @@ export default function AdminLocationsPage() {
       const products = row.products as { name?: string } | { name?: string }[] | null;
       const name = Array.isArray(products) ? products[0]?.name ?? '' : products?.name ?? '';
       const prev = map.get(pid);
-      const qty = row.qty_on_hand as number;
+      const qty = Number(row.qty_on_hand || 0);
+      const reserved = Number(row.qty_reserved || 0);
       if (prev) {
         prev.qty_on_hand += qty;
+        prev.qty_reserved += reserved;
       } else {
-        map.set(pid, { product_name: name, qty_on_hand: qty });
+        map.set(pid, { product_name: name, qty_on_hand: qty, qty_reserved: reserved });
       }
     }
 
@@ -158,6 +162,7 @@ export default function AdminLocationsPage() {
         product_id,
         product_name: v.product_name,
         qty_on_hand: v.qty_on_hand,
+        qty_reserved: v.qty_reserved,
         low_stock_threshold: 0,
       }))
       .sort((a, b) => b.qty_on_hand - a.qty_on_hand);
@@ -168,7 +173,7 @@ export default function AdminLocationsPage() {
   async function loadInventory(cityId: string) {
     const { data } = await supabase
       .from('inventory')
-      .select('id, product_id, qty_on_hand, low_stock_threshold, products(name)')
+      .select('id, product_id, qty_on_hand, qty_reserved, low_stock_threshold, products(name)')
       .eq('city_id', cityId);
 
     setInventory(
@@ -180,6 +185,7 @@ export default function AdminLocationsPage() {
           product_id: i.product_id,
           product_name,
           qty_on_hand: i.qty_on_hand,
+          qty_reserved: Number(i.qty_reserved || 0),
           low_stock_threshold: i.low_stock_threshold,
         };
       })
@@ -606,6 +612,8 @@ export default function AdminLocationsPage() {
             )}
           </div>
 
+          {selectedCity && <PreorderDemandPanel cityId={selectedCity} />}
+
           {selectedCity && (
             <div>
               <h2 className="font-bold mb-2 text-gray-900">
@@ -624,6 +632,9 @@ export default function AdminLocationsPage() {
                       <p className="font-medium text-gray-900">{row.product_name}</p>
                       <p className="text-sm text-gray-600">
                         Остаток: {row.qty_on_hand}
+                        {row.qty_reserved
+                          ? ` · резерв: ${row.qty_reserved} · доступно: ${Math.max(0, row.qty_on_hand) - row.qty_reserved}`
+                          : ''}
                         {selectedCity !== 'ALL'
                           ? ` (порог: ${row.low_stock_threshold})`
                           : ''}

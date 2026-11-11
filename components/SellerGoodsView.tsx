@@ -117,7 +117,7 @@ export default function SellerGoodsView({ canMutate }: { canMutate: boolean }) {
     }
     const { data, error } = await supabase
       .from('inventory')
-      .select('product_id, qty_on_hand')
+      .select('product_id, qty_on_hand, qty_reserved')
       .eq('city_id', warehouseId);
     if (error) {
       setMessage(error.message);
@@ -125,8 +125,10 @@ export default function SellerGoodsView({ canMutate }: { canMutate: boolean }) {
       return;
     }
     const map = new Map<string, number>();
-    (data || []).forEach((row: { product_id: string; qty_on_hand: number }) => {
-      map.set(row.product_id, Number(row.qty_on_hand) || 0);
+    (data || []).forEach((row: { product_id: string; qty_on_hand: number; qty_reserved?: number }) => {
+      const on = Number(row.qty_on_hand) || 0;
+      const res = Number(row.qty_reserved) || 0;
+      map.set(row.product_id, Math.max(0, on) - Math.max(0, res));
     });
     setStock(map);
   }, []);

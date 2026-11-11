@@ -25,7 +25,7 @@ export const PRODUCT_CATALOG_SELECT =
 
 /** Nested order_items for seller/manager/admin UI. Must not include cost_price_snapshot. */
 export const ORDER_ITEMS_PUBLIC_SELECT =
-  'id, product_id, product_name_snapshot, qty, price, line_sum, is_gift';
+  'id, product_id, product_name_snapshot, qty, qty_reserved, price, line_sum, is_gift';
 
 export type Product = {
   id: string;

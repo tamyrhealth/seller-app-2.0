@@ -11,6 +11,7 @@ import type {
   ResolveResult,
 } from '@/lib/assistant/orderDraftTypes';
 import { resolveInvoiceFromCatalogs, toDraftPreview } from '@/lib/assistant/invoiceResolve';
+import { availableQty } from '@/lib/inventoryAvailable';
 
 export type { ResolveResult } from '@/lib/assistant/orderDraftTypes';
 
@@ -62,12 +63,15 @@ export async function resolveInvoiceDraft(
   if (city_id && productIds.length) {
     const { data: inv, error: invErr } = await db
       .from('inventory')
-      .select('product_id, qty_on_hand')
+      .select('product_id, qty_on_hand, qty_reserved')
       .eq('city_id', city_id)
       .in('product_id', productIds);
     if (invErr) throw new Error(invErr.message);
     const stockByCityProduct = new Map(
-      (inv || []).map((r) => [`${city_id}:${r.product_id as string}`, Number(r.qty_on_hand || 0)])
+      (inv || []).map((r) => [
+        `${city_id}:${r.product_id as string}`,
+        availableQty(Number(r.qty_on_hand || 0), Number(r.qty_reserved || 0)),
+      ])
     );
     return resolveInvoiceFromCatalogs(parsed, originalText, phones, {
       sellers: sellerList,
@@ -143,11 +147,16 @@ export async function revalidateResolved(
   if (!resolved.is_preorder && productIds.length) {
     const { data: inv, error: invErr } = await db
       .from('inventory')
-      .select('product_id, qty_on_hand')
+      .select('product_id, qty_on_hand, qty_reserved')
       .eq('city_id', resolved.city_id)
       .in('product_id', productIds);
     if (invErr) throw new Error(invErr.message);
-    const stockMap = new Map((inv || []).map((r) => [r.product_id as string, Number(r.qty_on_hand || 0)]));
+    const stockMap = new Map(
+      (inv || []).map((r) => [
+        r.product_id as string,
+        availableQty(Number(r.qty_on_hand || 0), Number(r.qty_reserved || 0)),
+      ])
+    );
     for (const [pid, qty] of need) {
       const onHand = stockMap.get(pid) ?? 0;
       if (onHand < qty) {
@@ -327,11 +336,16 @@ export async function applyDraftEdit(db: SupabaseClient, input: DraftEditInput, 
     if (resolvedIds.length) {
       const { data: inv, error: invErr } = await db
         .from('inventory')
-        .select('product_id, qty_on_hand')
+        .select('product_id, qty_on_hand, qty_reserved')
         .eq('city_id', city.id)
         .in('product_id', resolvedIds);
       if (invErr) throw new Error(invErr.message);
-      const stockMap = new Map((inv || []).map((r) => [r.product_id as string, Number(r.qty_on_hand || 0)]));
+      const stockMap = new Map(
+        (inv || []).map((r) => [
+          r.product_id as string,
+          availableQty(Number(r.qty_on_hand || 0), Number(r.qty_reserved || 0)),
+        ])
+      );
       const need = new Map<string, number>();
       for (const item of items) {
         if (!item.product_id) continue;

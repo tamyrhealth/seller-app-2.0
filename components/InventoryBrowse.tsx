@@ -6,11 +6,14 @@ import type { City } from '@/lib/types';
 import { useTranslation } from '@/lib/i18n';
 import { useAuth } from '@/lib/auth';
 import { useUserUiState } from '@/lib/useUserUiState';
+import PreorderDemandPanel from '@/components/PreorderDemandPanel';
+import { availableQty } from '@/lib/inventoryAvailable';
 
 type StockRow = {
   city_id: string;
   product_id: string;
   qty_on_hand: number;
+  qty_reserved: number;
   product_name: string;
   unit: string;
   sort_order: number;
@@ -38,7 +41,7 @@ export default function InventoryBrowse() {
         supabase.from('cities').select('id, name, address, is_active').order('name'),
         supabase
           .from('inventory')
-          .select('city_id, product_id, qty_on_hand, products(name, unit, is_active, sort_order)'),
+          .select('city_id, product_id, qty_on_hand, qty_reserved, products(name, unit, is_active, sort_order)'),
       ]);
       if (cancelled) return;
       if (cityRes.error) {
@@ -66,6 +69,7 @@ export default function InventoryBrowse() {
           city_id: row.city_id as string,
           product_id: row.product_id as string,
           qty_on_hand: Number(row.qty_on_hand || 0),
+          qty_reserved: Number(row.qty_reserved || 0),
           product_name: prod.name || '',
           unit: prod.unit || '',
           sort_order: prod.sort_order ?? Number.POSITIVE_INFINITY,
@@ -96,6 +100,7 @@ export default function InventoryBrowse() {
 
   return (
     <div>
+      <PreorderDemandPanel cityId={selectedCity} />
       <div className="mb-3">
         <input
           value={search}
@@ -148,7 +153,10 @@ export default function InventoryBrowse() {
                       >
                         <p className="font-medium text-gray-900">{row.product_name}</p>
                         <p className="text-sm text-gray-900 whitespace-nowrap ml-3">
-                          {row.qty_on_hand} {row.unit}
+                          {availableQty(row.qty_on_hand, row.qty_reserved)} {row.unit}
+                          {row.qty_reserved
+                            ? ` (${t('stock.reserved')}: ${row.qty_reserved})`
+                            : ''}
                         </p>
                       </div>
                     ))}

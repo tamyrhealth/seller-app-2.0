@@ -18,6 +18,8 @@ import {
   runConfirmOrderOnce,
 } from '@/lib/orderIdempotency';
 import type { Product, PaymentType } from '@/lib/types';
+import { PRODUCT_CATALOG_SELECT } from '@/lib/types';
+import { CATALOG_INVENTORY_SELECT, stockFromInventoryRow, type CatalogProduct } from '@/lib/orderCatalogStock';
 import { applyCustomerToConfirmPayload } from '@/lib/orderCustomer';
 import { clearOrderFormDraft, useOrderFormDraft, type OrderFormDraft } from '@/lib/orderFormDraft';
 import SimilarOrdersWarning from '@/components/SimilarOrdersWarning';
@@ -67,7 +69,7 @@ export default function NewOrderPage() {
   const ensureActive = useEnsureActiveDevice();
   const router = useRouter();
 
-  const [products, setProducts] = useState<Array<Product & { inventory?: { qty_on_hand: number } }>>([]);
+  const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentType, setPaymentType] = useState<PaymentType | ''>('');
@@ -144,12 +146,12 @@ export default function NewOrderPage() {
     setError(null);
     (async () => {
       try {
-        const { data, error: qErr } = await supabase
-          .from('inventory')
-          .select('product_id, qty_on_hand, products(id, name, category, unit, price_retail, is_active, sort_order)')
-          .eq('city_id', cityId)
-          .gt('qty_on_hand', 0);
+        const [{ data: catalog, error: pErr }, { data: inv, error: iErr }] = await Promise.all([
+          supabase.from('products').select(PRODUCT_CATALOG_SELECT).eq('is_active', true),
+          supabase.from('inventory').select(CATALOG_INVENTORY_SELECT).eq('city_id', cityId),
+        ]);
         if (cancelled) return;
+        const qErr = pErr || iErr;
         if (qErr) {
           if (isSessionError(qErr)) {
             signOut(t('auth.sessionExpired'));
@@ -158,16 +160,15 @@ export default function NewOrderPage() {
           setError(qErr.message);
           return;
         }
-        const rows: Array<Product & { inventory?: { qty_on_hand: number } }> = [];
-        for (const row of data || []) {
-          const p = row.products as Product | Product[] | null;
-          const prod = Array.isArray(p) ? p[0] : p;
-          if (prod && prod.is_active) {
-            rows.push({
-              ...prod,
-              inventory: { qty_on_hand: row.qty_on_hand },
-            });
-          }
+        const stock = new Map(
+          (inv || []).map((row) => [row.product_id as string, stockFromInventoryRow(row)])
+        );
+        const rows: CatalogProduct[] = [];
+        for (const prod of (catalog || []) as Product[]) {
+          rows.push({
+            ...prod,
+            inventory: stock.get(prod.id) || stockFromInventoryRow({ qty_on_hand: 0, qty_reserved: 0 }),
+          });
         }
         rows.sort((a, b) => {
           const aOrder = a.sort_order ?? Number.POSITIVE_INFINITY;
@@ -191,8 +192,8 @@ export default function NewOrderPage() {
   const isPreorder = orderType === 'preorder';
   const isDebt = orderType === 'debt';
 
-  function addToCart(p: Product & { inventory?: { qty_on_hand: number } }) {
-    const qty = p.inventory?.qty_on_hand ?? 0;
+  function addToCart(p: CatalogProduct) {
+    const qty = p.inventory?.qty_available ?? 0;
     if (!isPreorder && !isDebt && qty <= 0) return;
     const maxQty = isPreorder ? 999 : qty;
     const existing = cart.find((c) => c.product_id === p.id);
@@ -444,12 +445,14 @@ export default function NewOrderPage() {
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-sm truncate text-gray-900">{p.name}</p>
                     <p className="text-xs text-gray-600">
-                      {formatMoney(p.price_retail)} ₸ · {t('newOrder.stock')}: {p.inventory?.qty_on_hand ?? 0}
+                      {formatMoney(p.price_retail)} ₸ · {t('stock.available')}:{' '}
+                      {p.inventory?.qty_available ?? 0}
+                      {p.inventory?.qty_reserved ? ` · ${t('stock.reserved')}: ${p.inventory.qty_reserved}` : ''}
                     </p>
                   </div>
                   <button
                     onClick={() => addToCart(p)}
-                    disabled={!isPreorder && (p.inventory?.qty_on_hand ?? 0) <= 0}
+                    disabled={!isPreorder && (p.inventory?.qty_available ?? 0) <= 0}
                     className="shrink-0 min-h-[48px] min-w-[48px] w-12 h-12 flex items-center justify-center bg-green-600 text-white rounded-xl disabled:opacity-50 text-lg font-medium"
                   >
                     +
