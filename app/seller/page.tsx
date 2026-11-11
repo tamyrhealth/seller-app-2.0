@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Protected from '@/components/Protected';
 import NavSeller from '@/components/NavSeller';
 import Link from 'next/link';
@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/auth';
 import { sumConfirmedInRange, isConfirmedInRange } from '@/lib/accounting';
 import { getTodayLocalISO, getLocalDayRangeInTz } from '@/lib/datetime';
 import { useTranslation } from '@/lib/i18n';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import type { Order } from '@/lib/types';
 
 function formatMoney(n: number) {
@@ -23,6 +24,7 @@ export default function SellerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const paintedScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     const onVis = () => {
@@ -38,6 +40,7 @@ export default function SellerPage() {
       return;
     }
     let cancelled = false;
+    if (!isSilentPageReload('seller-home', paintedScopeRef)) setLoading(true);
     setError(null);
     (async () => {
       try {
@@ -85,7 +88,10 @@ export default function SellerPage() {
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : t('common.errorLoad'));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          markPageQueryPainted('seller-home', paintedScopeRef);
+        }
       }
     })();
     return () => {

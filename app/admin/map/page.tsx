@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import AdminKazakhstanMap from '@/components/AdminKazakhstanMap';
 import NavAdmin from '@/components/NavAdmin';
 import Protected from '@/components/Protected';
@@ -16,6 +16,7 @@ import {
 import { useAuth } from '@/lib/auth';
 import { formatInstantDmy } from '@/lib/datetime';
 import { runExclusive } from '@/lib/exclusiveAsync';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import { fetchInTransitMapTransfers } from '@/lib/fetchAdminMapTransfers';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
@@ -179,6 +180,7 @@ export default function AdminMapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const paintedScopeRef = useRef<string | null>(null);
   const [selection, setSelection] = useState<MapSelection>({
     expandedGeoId: null,
     selectedCityId: null,
@@ -198,7 +200,9 @@ export default function AdminMapPage() {
   useEffect(() => {
     if (!authReady || !isAdmin) return;
     let cancelled = false;
-    setLoading((was) => (cities.length === 0 ? true : was));
+    if (!isSilentPageReload('admin-map', paintedScopeRef)) {
+      setLoading((was) => (cities.length === 0 ? true : was));
+    }
     setError(null);
     setTransfersError(null);
     (async () => {
@@ -240,6 +244,7 @@ export default function AdminMapPage() {
           setTransfersError(null);
         }
         setLoading(false);
+        markPageQueryPainted('admin-map', paintedScopeRef);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'network');

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import TableScroll from '@/components/TableScroll';
@@ -25,6 +25,7 @@ import {
 import { getTodayLocalISO } from '@/lib/datetime';
 import { fetchRecognizedWindow } from '@/lib/fetchAdminStatsOrders';
 import { runExclusive } from '@/lib/exclusiveAsync';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import { useTranslation } from '@/lib/i18n';
 import type { ProductCostRow } from '@/lib/productCost';
 import { supabase } from '@/lib/supabaseClient';
@@ -134,6 +135,7 @@ export default function AdminAbcPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const paintedPeriodRef = useRef<string | null>(null);
   const years = useMemo(() => {
     const y = Number(today.slice(0, 4));
     return [y - 2, y - 1, y];
@@ -179,7 +181,7 @@ export default function AdminAbcPage() {
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    if (!isSilentPageReload(periodKey, paintedPeriodRef)) setLoading(true);
     setError(null);
     (async () => {
       try {
@@ -222,6 +224,7 @@ export default function AdminAbcPage() {
           );
         }
         setLoading(false);
+        markPageQueryPainted(periodKey, paintedPeriodRef);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'network');

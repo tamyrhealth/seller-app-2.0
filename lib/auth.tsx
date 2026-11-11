@@ -52,8 +52,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   function applySession(s: Session | null) {
+    const prevUserId = userRef.current?.id ?? null;
+    const nextUserId = s?.user?.id ?? null;
     sessionRef.current = s;
     userRef.current = s?.user ?? null;
+    // Same user (token refresh / getSession): skip React setState so pages keep scroll.
+    if (s && prevUserId && prevUserId === nextUserId) {
+      return;
+    }
     safeSet(setSession, s);
     safeSet(setUser, s?.user ?? null);
   }

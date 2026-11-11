@@ -28,6 +28,7 @@ if (!auth.includes("event === 'TOKEN_REFRESHED'")) fail('must handle TOKEN_REFRE
 const tokenBlock = auth.slice(auth.indexOf("event === 'TOKEN_REFRESHED'"), auth.indexOf("event === 'SIGNED_IN'"));
 if (tokenBlock.includes('refreshProfile')) fail('TOKEN_REFRESHED must not call refreshProfile');
 if (!tokenBlock.includes('if (s) applySession(s)')) fail('TOKEN_REFRESHED must keep current session if payload is empty');
+if (!auth.includes('prevUserId === nextUserId')) fail('same-user token refresh must not remount the tree');
 if (!auth.includes('sameUser && profileRef.current')) fail('SIGNED_IN same user must not reload profile');
 if (!auth.includes('revalidateSession')) fail('must revalidate session on resume');
 if (!auth.includes('online')) fail('must revalidate when network returns');

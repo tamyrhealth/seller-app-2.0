@@ -10,6 +10,7 @@ import { getTodayLocalISO } from '@/lib/datetime';
 import { fetchRecognizedWindow, fetchUnpaidDebts } from '@/lib/fetchAdminStatsOrders';
 import { summarizeUnpaidDebts, type StatsOrder } from '@/lib/adminStats';
 import { newClientOperationId, runExclusive } from '@/lib/exclusiveAsync';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import {
   buildAdminFinance,
   FINANCE_CARGO_CUSTOMS_CATEGORY,
@@ -191,6 +192,8 @@ export default function AdminFinancePage() {
   const [historyRows, setHistoryRows] = useState<FinanceExpenseEventRow[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const operationIdRef = useRef(newClientOperationId());
+  const paintedPeriodRef = useRef<string | null>(null);
+  const paintedDebtRef = useRef<string | null>(null);
 
   const spec = useMemo(
     () => resolveFinanceRange({ mode, customFrom, customTo }),
@@ -224,7 +227,7 @@ export default function AdminFinancePage() {
 
   useEffect(() => {
     let cancelled = false;
-    setDebtLoading(true);
+    if (!isSilentPageReload('unpaid-debts', paintedDebtRef)) setDebtLoading(true);
     setDebtError(null);
     (async () => {
       const debts = await fetchUnpaidDebts();
@@ -239,6 +242,7 @@ export default function AdminFinancePage() {
       setUnpaidDebts(debts.orders);
       setDebtTruncated(debts.truncated);
       setDebtLoading(false);
+      markPageQueryPainted('unpaid-debts', paintedDebtRef);
     })();
     return () => {
       cancelled = true;
@@ -259,7 +263,7 @@ export default function AdminFinancePage() {
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    if (!isSilentPageReload(periodKey, paintedPeriodRef)) setLoading(true);
     setError(null);
     (async () => {
       try {
@@ -312,6 +316,7 @@ export default function AdminFinancePage() {
         setSellerPnlStatus(pnlParsed.status);
         setSellerPnlError(pnlParsed.status === 'connected' ? null : rpcMessage(pnlRes.error) || 'seller-pnl');
         setLoading(false);
+        markPageQueryPainted(periodKey, paintedPeriodRef);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'network');

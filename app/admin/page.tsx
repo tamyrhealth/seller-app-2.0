@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   adminDashboardAvgCheck,
   productQtySharePct,
@@ -11,6 +11,7 @@ import NavAdmin from '@/components/NavAdmin';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 import { getTodayLocalISO, getLocalDayRangeInTz } from '@/lib/datetime';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import {
   buildTodaySalesDashboard,
   type CityRevenue,
@@ -150,6 +151,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const paintedScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     const onVis = () => {
@@ -162,6 +164,7 @@ export default function AdminPage() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      if (!isSilentPageReload('admin-today', paintedScopeRef)) setLoading(true);
       setError(null);
       const today = getTodayLocalISO('Asia/Almaty');
       const range = getLocalDayRangeInTz(today, 'Asia/Almaty');
@@ -233,6 +236,7 @@ export default function AdminPage() {
       setSellerRows(dash.sellerRows);
       setProductRows(dash.productRows);
       setLoading(false);
+      markPageQueryPainted('admin-today', paintedScopeRef);
     }
 
     load();

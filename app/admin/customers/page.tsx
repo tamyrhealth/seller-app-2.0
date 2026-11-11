@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import TableScroll from '@/components/TableScroll';
@@ -16,6 +16,7 @@ import { formatCustomerKpi, resolveCustomerRange, type CustomerPeriodMode } from
 import { fetchAllCustomerOrders } from '@/lib/fetchAdminCustomerOrders';
 import { formatInstantDmy, getTodayLocalISO } from '@/lib/datetime';
 import { runExclusive } from '@/lib/exclusiveAsync';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -114,6 +115,7 @@ export default function AdminCustomersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const paintedScopeRef = useRef<string | null>(null);
   const [openPhone, setOpenPhone] = useState<string | null>(null);
   const years = useMemo(() => {
     const y = Number(today.slice(0, 4));
@@ -153,7 +155,7 @@ export default function AdminCustomersPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (!isSilentPageReload('customers-orders', paintedScopeRef)) setLoading(true);
     setError(null);
     (async () => {
       const fetched = await runExclusive('admin-customers-orders', fetchAllCustomerOrders);
@@ -168,6 +170,7 @@ export default function AdminCustomersPage() {
       setLoaded(fetched.loaded);
       setTotal(fetched.total);
       setLoading(false);
+      markPageQueryPainted('customers-orders', paintedScopeRef);
     })();
     return () => {
       cancelled = true;

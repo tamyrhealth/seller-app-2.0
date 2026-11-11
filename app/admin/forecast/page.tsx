@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Protected from '@/components/Protected';
 import NavAdmin from '@/components/NavAdmin';
 import TableScroll from '@/components/TableScroll';
@@ -26,6 +26,7 @@ import {
 } from '@/lib/adminForecastView';
 import { useAuth } from '@/lib/auth';
 import { runExclusive } from '@/lib/exclusiveAsync';
+import { isSilentPageReload, markPageQueryPainted } from '@/lib/pageViewport';
 import { useTranslation } from '@/lib/i18n';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -119,6 +120,7 @@ export default function AdminForecastPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const paintedScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     const onVis = () => {
@@ -131,7 +133,7 @@ export default function AdminForecastPage() {
   useEffect(() => {
     if (!authReady || !isAdmin) return;
     let cancelled = false;
-    setLoading(true);
+    if (!isSilentPageReload('forecast', paintedScopeRef)) setLoading(true);
     setError(null);
     const spec = physicalDemandRange90();
     (async () => {
@@ -188,6 +190,7 @@ export default function AdminForecastPage() {
         );
         setCities((cityRes.data || []) as { id: string; name: string }[]);
         setLoading(false);
+        markPageQueryPainted('forecast', paintedScopeRef);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'network');
