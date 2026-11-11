@@ -193,7 +193,7 @@ function uniqueOrAmbiguous(ranked: { product: CatalogProduct; score: number }[])
   if (!strong.length) return { chosen: null, candidates: [], reason: 'none' };
   const best = strong[0];
   const close = strong.filter((x) => best.score - x.score < 8);
-  if (best.score >= 88 && close.length === 1) {
+  if (close.length === 1 && best.score >= 72) {
     return { chosen: best.product, candidates: [best.product], reason: best.score >= 99 ? 'exact' : 'similar' };
   }
   const candidates = close.slice(0, 5).map((x) => x.product);

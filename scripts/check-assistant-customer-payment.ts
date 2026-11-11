@@ -42,6 +42,7 @@ for (const raw of ['87071234567', '+77071234567', '7071234567', '8 707 123 45 67
 
 const cash = detectPayment(SAMPLE);
 if (cash.payment_type !== 'cash' || cash.ambiguous) fail('Наличка must be cash');
+if (cash.paid_status) fail('Наличка must not mark the order as paid');
 if (paymentLabel('cash', false) !== 'Наличные') fail('cash label');
 
 const cashWords = ['нал', 'наличка', 'наличные', 'налом', 'қолма-қол', 'қолма қол'];

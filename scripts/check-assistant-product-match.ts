@@ -62,6 +62,11 @@ one('ПОРОШОК ОРГ 250г', 'ПОРОШОК ОРГ 250г');
 const krem = resolveProductQuery('крем', catalog);
 if (krem.chosen) fail('крем must not auto-pick');
 if (krem.candidates.length < 2 || krem.candidates.length > 5) fail('крем should offer 2-5 candidates');
+const oneShamp = resolveProductQuery('шампунь', [
+  { id: 'p-shamp', name: 'ШАМПУНЬ', unit: 'pcs', price_retail: 450, is_active: true },
+  { id: 'p3', name: 'ШАЙ ОРГ 500г', unit: 'g', price_retail: 800, is_active: true },
+]);
+if (oneShamp.chosen?.id !== 'p-shamp') fail('unique shampoo must auto-pick');
 if (krem.candidates.some((c) => c.is_active === false)) fail('candidates must be active');
 const short = resolveProductQuery('ма', catalog);
 if (short.chosen) fail('short prefix must not auto-pick a product');

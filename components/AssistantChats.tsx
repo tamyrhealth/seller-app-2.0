@@ -90,7 +90,32 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
+  const [newlineOnEnter, setNewlineOnEnter] = useState(false);
   const NEAR_BOTTOM_PX = 96;
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const coarse = window.matchMedia('(pointer: coarse)');
+    const noHover = window.matchMedia('(hover: none)');
+    const sync = () => {
+      setNewlineOnEnter(coarse.matches || noHover.matches || navigator.maxTouchPoints > 0);
+    };
+    sync();
+    const listen = (mq: MediaQueryList, fn: () => void) => {
+      if (typeof mq.addEventListener === 'function') mq.addEventListener('change', fn);
+      else mq.addListener(fn);
+      return () => {
+        if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', fn);
+        else mq.removeListener(fn);
+      };
+    };
+    const offCoarse = listen(coarse, sync);
+    const offHover = listen(noHover, sync);
+    return () => {
+      offCoarse();
+      offHover();
+    };
+  }, []);
 
   function isThreadNearBottom(el: HTMLElement) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
@@ -896,18 +921,20 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                       if (openId) draftsByChatRef.current[openId] = e.target.value;
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void send();
-                      }
+                      if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+                      if (newlineOnEnter) return;
+                      e.preventDefault();
+                      void send();
                     }}
-                    rows={2}
+                    rows={newlineOnEnter ? 4 : 2}
                     disabled={busy}
-                    enterKeyHint="send"
+                    enterKeyHint={newlineOnEnter ? 'enter' : 'send'}
                     onFocus={() => {
                       if (stickToBottomRef.current) scrollThreadToEnd();
                     }}
-                    className="min-w-0 flex-1 max-h-32 overflow-y-auto px-3 py-2.5 border border-gray-300 rounded-xl bg-white text-gray-900 resize-none text-base"
+                    className={`min-w-0 flex-1 overflow-y-auto px-3 py-2.5 border border-gray-300 rounded-xl bg-white text-gray-900 resize-none text-base ${
+                      newlineOnEnter ? 'min-h-[6.5rem] max-h-[40vh]' : 'max-h-32'
+                    }`}
                     placeholder="Сообщение"
                   />
                   <button

@@ -2,6 +2,7 @@ import type { PaymentType } from '@/lib/types';
 import type { ParsedInvoice } from '@/lib/assistant/invoiceParse';
 import { resolveProductQuery, type CatalogProduct } from '@/lib/assistant/productAliases';
 import type { CityMatchRow, SellerMatchRow } from '@/lib/assistant/sellerCityMatch';
+import { parseInvoiceItemLines } from '@/lib/assistant/invoiceLines';
 import { resolveInvoiceSeller } from '@/lib/assistant/invoiceSeller';
 import {
   detectPayment,
@@ -137,7 +138,8 @@ export function resolveInvoiceFromCatalogs(
   const city_name = placed.city_name;
   const city_candidates = placed.city_candidates;
 
-  const parsedItems = parsed.items.length ? parsed.items : [];
+  const lineItems = parseInvoiceItemLines(originalText);
+  const parsedItems = lineItems.length ? lineItems : parsed.items.length ? parsed.items : [];
   if (parsedItems.length === 0) {
     errors.push(issue('items_missing', 'Товары не распознаны. Перечислите название и количество.'));
   }

@@ -107,6 +107,12 @@ if (!i18n.includes("'orders.status.canceled': 'Болдырылған'")) fail('
 if (!chatsUi.includes("placeholder=\"Сообщение\"")) fail('message placeholder');
 if (!chatsUi.includes('open_empty_assistant_chat')) fail('UI must call empty-chat RPC');
 if (!chatsUi.includes('Shift') && !chatsUi.includes('shiftKey')) fail('Shift+Enter newline');
+if (!chatsUi.includes('newlineOnEnter')) fail('touch devices must keep Enter as a newline');
+if (!chatsUi.includes("enterKeyHint={newlineOnEnter ? 'enter' : 'send'}")) {
+  fail('iOS keyboard must not show a send key while typing an invoice');
+}
+if (!chatsUi.includes('if (newlineOnEnter) return')) fail('mobile Enter must not submit the composer');
+if (!chatsUi.includes('aria-label="Отправить"')) fail('send stays on the dedicated button');
 if (!chatsUi.includes('el.scrollTop = el.scrollHeight') || !chatsUi.includes('stickToBottomRef')) {
   fail('auto-scroll');
 }

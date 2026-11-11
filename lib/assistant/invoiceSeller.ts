@@ -1,4 +1,5 @@
 import { nameKey } from '@/lib/assistant/nameFold';
+import { invoiceHeaderSellerName } from '@/lib/assistant/invoiceLines';
 import {
   matchSellers,
   resolveSellerAndCity,
@@ -51,15 +52,9 @@ export function invoiceSellerNameQueries(text: string, parsedSellerName: string)
     out.push(name);
   };
   add(parsedSellerName);
+  add(invoiceHeaderSellerName(text) || '');
   const sellerLine = String(text || '').match(/(?:продавец|сатушы)\s*[:\-–]\s*([^\n]+)/i);
   if (sellerLine) add(sellerLine[1]);
-  for (const line of String(text || '')
-    .split(/\n/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 5)) {
-    add(line);
-  }
   return out;
 }
 
@@ -70,31 +65,40 @@ export function resolveInvoiceSeller(
   sellers: SellerMatchRow[],
   cities: CityMatchRow[]
 ) {
+  const headerName = invoiceHeaderSellerName(originalText);
   const parsedName = usableName(parsedSellerName) || String(parsedSellerName || '').trim();
   const queries = invoiceSellerNameQueries(originalText, parsedName);
+  const activeSellers = sellers.filter((s) => s.city_id);
 
-  if (parsedName) {
+  if (headerName) {
+    const headerHits = matchSellers(headerName, activeSellers);
+    if (headerHits.length === 1) {
+      return resolveSellerAndCity(headerHits[0].display_name, parsedCityName, sellers, cities);
+    }
+    if (headerHits.length > 1) {
+      return resolveSellerAndCity(headerName, parsedCityName, sellers, cities);
+    }
+  }
+
+  if (parsedName && (!headerName || nameKey(parsedName) === nameKey(headerName))) {
     const placed = resolveSellerAndCity(parsedName, parsedCityName, sellers, cities);
     if (placed.seller_id || placed.errors.some((e) => e.code === 'seller_ambiguous')) {
       return placed;
     }
-    const others = queries.filter((q) => nameKey(q) !== nameKey(parsedName));
-    const uniqueOther = uniqueSellerHit(others, sellers);
-    if (uniqueOther) {
-      return resolveSellerAndCity(uniqueOther.display_name, parsedCityName, sellers, cities);
-    }
-    return placed;
   }
 
   const unique = uniqueSellerHit(queries, sellers);
   if (unique) {
     return resolveSellerAndCity(unique.display_name, parsedCityName, sellers, cities);
   }
-  const ambiguousQuery = queries.find((q) => matchSellers(q, sellers.filter((s) => s.city_id)).length > 1);
+  const ambiguousQuery = queries.find((q) => matchSellers(q, activeSellers).length > 1);
   if (ambiguousQuery) {
     return resolveSellerAndCity(ambiguousQuery, parsedCityName, sellers, cities);
   }
-  return resolveSellerAndCity('', parsedCityName, sellers, cities);
+  if (headerName) {
+    return resolveSellerAndCity(headerName, parsedCityName, sellers, cities);
+  }
+  return resolveSellerAndCity(parsedName, parsedCityName, sellers, cities);
 }
 
 function uniqueSellerHit(queries: string[], sellers: SellerMatchRow[]): SellerMatchRow | null {

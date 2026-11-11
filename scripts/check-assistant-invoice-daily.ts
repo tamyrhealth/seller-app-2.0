@@ -4,6 +4,7 @@ import { detectPayment, looksLikeInvoice, paymentLabel } from '../lib/assistant/
 import { extractInvoiceCustomer } from '../lib/assistant/customerExtract';
 import { resolveInvoiceFromCatalogs, draftChoiceHints } from '../lib/assistant/invoiceResolve';
 import { sellerMatchesByPhone } from '../lib/assistant/invoiceSeller';
+import { invoiceHeaderSellerName, parseInvoiceItemLines } from '../lib/assistant/invoiceLines';
 import { resolveProductQuery } from '../lib/assistant/productAliases';
 import { isAssistantRole } from '../lib/roles';
 import type { ParsedInvoice } from '../lib/assistant/invoiceParse';
@@ -160,7 +161,9 @@ const noSeller = resolveInvoiceFromCatalogs(baseParsed({ seller_name: '' }), SAM
   stockByCityProduct: stockOk,
 });
 if (noSeller.resolved.seller_id) fail('must not invent seller from customer name');
-if (!noSeller.errors.some((e) => e.code === 'seller_missing')) fail('need seller_missing');
+if (!noSeller.errors.some((e) => e.code === 'seller_missing' || e.code === 'seller_not_found')) {
+  fail('need seller_missing or seller_not_found');
+}
 if (noSeller.can_confirm) fail('no seller cannot confirm');
 
 const twins = resolveInvoiceFromCatalogs(baseParsed({ seller_name: '' }), SAMPLE, ['+77771234567'], {
@@ -250,12 +253,140 @@ if (cancelRoute.includes("rpc('confirm_order'")) fail('draft cancel must not wri
 
 const resolve = read('lib/assistant/resolveOrder.ts');
 if (!resolve.includes('resolveInvoiceFromCatalogs')) fail('catalog resolve');
+const AIGUL_INVOICE = `Айгүл
+Анар 87071234567
+Порошок 1
+Шай 1
+1 Пластырь
+1 мазь
+2 шампунь
+Крем 3
+Драже 2
+Наличка`;
+
+const aigulCatalog = [
+  ...products,
+  { id: 'p-plaster', name: 'ПЛАСТЫРЬ 50шт', unit: 'pcs', price_retail: 500, is_active: true },
+  { id: 'p-maz', name: 'МАЗЬ', unit: 'pcs', price_retail: 300, is_active: true },
+  { id: 'p-shamp', name: 'ШАМПУНЬ', unit: 'pcs', price_retail: 450, is_active: true },
+  { id: 'p-krem1', name: 'Крем дневной', unit: 'pcs', price_retail: 200, is_active: true },
+  { id: 'p-krem2', name: 'Крем ночной', unit: 'pcs', price_retail: 210, is_active: true },
+  { id: 'p-drazhe', name: 'ДРАЖЕ 250г', unit: 'g', price_retail: 400, is_active: true },
+];
+const aigulStock = new Map([
+  ...stockOk,
+  ['c1:p-plaster', 20],
+  ['c1:p-maz', 20],
+  ['c1:p-shamp', 20],
+  ['c1:p-krem1', 20],
+  ['c1:p-krem2', 20],
+  ['c1:p-drazhe', 20],
+]);
+
+const aigulEmptyAi: ParsedInvoice = {
+  intent: 'create_order',
+  seller_name: '',
+  city_name: '',
+  customer_name: 'Анар',
+  payment_raw: 'Наличка',
+  is_debt: false,
+  is_preorder: false,
+  pickup_date: '',
+  pickup_time: '',
+  note: '',
+  items: [],
+};
+
+const aigulDraft = resolveInvoiceFromCatalogs(aigulEmptyAi, AIGUL_INVOICE, ['+77071234567'], {
+  sellers: uniqueSellers,
+  cities,
+  products: aigulCatalog,
+  stockByCityProduct: aigulStock,
+});
+if (aigulDraft.resolved.seller_id !== 's1') fail(`Айгүл must resolve as seller, got ${aigulDraft.resolved.seller_name}`);
+if (aigulDraft.resolved.city_id !== 'c1') fail('unique seller city must fill');
+if (aigulDraft.resolved.customer_name !== 'Анар') fail(`customer ${aigulDraft.resolved.customer_name}`);
+if (aigulDraft.resolved.payment_type !== 'cash') fail('Наличка is cash');
+if (aigulDraft.resolved.paid_status) fail('Наличка must not mark the order paid');
+const aigulNames = aigulDraft.resolved.items.map((i) => `${i.raw_name}:${i.qty}`).sort().join(',');
+if (!aigulNames.includes('Порошок:1') && !aigulNames.includes('порошок:1')) {
+  if (!aigulDraft.resolved.items.some((i) => i.qty === 1 && /порошок/i.test(i.raw_name))) {
+    fail(`qty/name lines: ${aigulNames}`);
+  }
+}
+if (!aigulDraft.resolved.items.some((i) => i.qty === 1 && /пластыр/i.test(i.raw_name))) fail('qty-before plaster');
+if (!aigulDraft.resolved.items.some((i) => i.qty === 2 && /шампун/i.test(i.raw_name))) fail('qty-before shampoo');
+if (!aigulDraft.resolved.items.some((i) => i.qty === 3 && /крем/i.test(i.raw_name))) fail('qty-after cream');
+const kremLine = aigulDraft.resolved.items.find((i) => /крем/i.test(i.raw_name));
+if (!kremLine?.unresolved) fail('крем must stay ambiguous when several SKUs exist');
+if ((kremLine?.candidates?.length || 0) < 2) fail('крем must offer SKU choices');
+if (aigulDraft.can_confirm) fail('must not confirm while cream SKU is ambiguous');
+if (!aigulDraft.errors.some((e) => e.code === 'product_ambiguous')) fail('need product_ambiguous for крем');
+const shamp = aigulDraft.resolved.items.find((i) => /шампун/i.test(i.raw_name));
+if (shamp?.unresolved || shamp?.product_id !== 'p-shamp') fail('unique shampoo must auto-pick');
+
+const polluted = resolveInvoiceFromCatalogs(aigulEmptyAi, AIGUL_INVOICE, ['+77071234567'], {
+  sellers: [
+    { id: 's1', display_name: 'Айгүл', city_id: 'c1' },
+    { id: 's5', display_name: 'Анар', city_id: 'c2' },
+  ],
+  cities,
+  products: aigulCatalog,
+  stockByCityProduct: aigulStock,
+});
+if (polluted.resolved.seller_id !== 's1') fail('customer Анар must not override seller Айгүл');
+
+const aigulTwins = resolveInvoiceFromCatalogs(aigulEmptyAi, AIGUL_INVOICE, ['+77071234567'], {
+  sellers: twinSellers,
+  cities,
+  products: aigulCatalog,
+  stockByCityProduct: aigulStock,
+});
+if (aigulTwins.resolved.seller_id) fail('two Айгүл must not auto-pick');
+if (!aigulTwins.errors.some((e) => e.code === 'seller_ambiguous')) fail('need seller_ambiguous for two Айгүл');
+if (aigulTwins.resolved.city_id) fail('must not guess city when sellers are ambiguous');
+
+const oneKrem = resolveInvoiceFromCatalogs(aigulEmptyAi, AIGUL_INVOICE, ['+77071234567'], {
+  sellers: uniqueSellers,
+  cities,
+  products: aigulCatalog.filter((p) => p.id !== 'p-krem2'),
+  stockByCityProduct: aigulStock,
+});
+const oneKremLine = oneKrem.resolved.items.find((i) => /крем/i.test(i.raw_name));
+if (oneKremLine?.product_id !== 'p-krem1' || oneKremLine.unresolved) fail('single cream SKU must auto-pick');
+
+if (invoiceHeaderSellerName('Айгүл\nпривет, какие остатки?')) {
+  fail('first line must not become a seller outside an invoice');
+}
+if (looksLikeInvoice('Айгүл\nпривет, какие остатки?')) fail('chat question is not an invoice');
+if (invoiceHeaderSellerName('Айгүл 87771234567\n2 порошок') !== 'Айгүл') {
+  fail('packed Айгүл 8777… must still be the seller');
+}
+if (!parseInvoiceItemLines(SAMPLE).some((i) => i.qty === 2 && /порошок/i.test(i.name))) {
+  fail('packed invoice qty-first lines must parse');
+}
+
+const updateRoute = read('app/api/assistant/orders/update/route.ts');
+if (updateRoute.includes('parseInvoiceItemLines') || updateRoute.includes('invoiceHeaderSellerName')) {
+  fail('card save must not re-parse the original invoice text');
+}
+if (!updateRoute.includes('applyDraftEdit') || !updateRoute.includes('qty: Number(row.qty)')) {
+  fail('card save must keep edited qty');
+}
+if (!updateRoute.includes('payment_type')) fail('card save must keep edited payment');
+if (updateRoute.includes("rpc('confirm_order'")) fail('update must not confirm');
+
 if (resolve.includes('parsed.is_preorder === true || keywords.is_preorder')) {
   fail('must not trust LLM preorder from a date');
 }
 
 const parse = read('lib/assistant/invoiceParse.ts');
 if (!parse.includes('это НЕ Kaspi')) fail('parse prompt paid vs method');
+if (!parse.includes('qty может стоять до или после')) fail('parse prompt qty both sides');
+const lines = read('lib/assistant/invoiceLines.ts');
+if (!lines.includes('invoiceHeaderSellerName')) fail('header seller extractor');
+const invoiceSellerSrc = read('lib/assistant/invoiceSeller.ts');
+if (!invoiceSellerSrc.includes('invoiceHeaderSellerName')) fail('seller resolve must prefer header line');
 if (!parse.includes('НЕ делают предзаказ')) fail('parse prompt date is not preorder');
 
 console.log('assistant-invoice-daily checks ok');
