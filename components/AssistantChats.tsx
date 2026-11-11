@@ -100,6 +100,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     const el = threadRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      const again = threadRef.current;
+      if (again) again.scrollTop = again.scrollHeight;
+    });
   }
 
   function syncJumpFromThread() {
@@ -204,7 +208,20 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
     scrollThreadToEnd();
     setShowJump(false);
-  }, [messages, waitingAi, openId]);
+  }, [messages, drafts, transferDrafts, waitingAi, openId]);
+
+  useEffect(() => {
+    const el = threadRef.current;
+    if (!el || !openId || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickToBottomRef.current) scrollThreadToEnd();
+      else syncJumpFromThread();
+    });
+    ro.observe(el);
+    const inner = el.firstElementChild;
+    if (inner instanceof HTMLElement) ro.observe(inner);
+    return () => ro.disconnect();
+  }, [openId, messages.length, waitingAi]);
 
   async function createChat() {
     if (!profile?.id || busy || readOnly) return;
@@ -646,7 +663,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const openNumber = open ? displayChatNumber(open) : '';
 
   return (
-    <div className="h-full min-h-0 overflow-hidden flex flex-col md:grid md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] md:gap-3">
+    <div className="h-full min-h-0 overflow-hidden flex flex-col md:grid md:h-full md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:gap-3">
       <div
         className={`min-h-0 overflow-hidden flex-col ${
           open ? 'hidden md:flex' : 'flex flex-1'
@@ -689,7 +706,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
         </ul>
       </div>
       <div
-        className={`min-h-0 overflow-hidden border border-gray-200 rounded-xl bg-white flex-col ${
+        className={`min-h-0 overflow-hidden border border-gray-200 rounded-xl bg-slate-50 flex-col ${
           open ? 'flex flex-1' : 'hidden md:flex md:flex-1'
         }`}
       >
@@ -697,7 +714,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
           <p className="m-4 text-sm text-gray-600">Выберите или создайте диалог. История хранится в базе.</p>
         ) : (
           <>
-            <div className="shrink-0 border-b border-gray-100 px-3 py-2 space-y-2">
+            <div className="shrink-0 border-b border-gray-200 bg-white px-3 py-2 space-y-2">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -729,8 +746,9 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
               <div
                 ref={threadRef}
                 onScroll={() => syncJumpFromThread()}
-                className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2 overscroll-contain"
+                className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 overscroll-contain"
               >
+                <div className="flex min-h-full flex-col justify-end gap-3">
                 {messages.length === 0 && !waitingAi ? (
                   <p className="text-sm text-gray-600">Сообщений нет</p>
                 ) : (
@@ -752,19 +770,30 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               row.id === m.metadata?.draft_id
                           )
                         : undefined;
+                    const hasCard = Boolean(
+                      card ||
+                        transferCard ||
+                        m.metadata?.kind === 'cancel_preview' ||
+                        m.metadata?.kind === 'transfer_manage'
+                    );
                     return (
                       <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          className={`max-w-[min(100%,36rem)] min-w-0 rounded-2xl px-3 py-2 text-sm ${
-                            mine ? 'ml-8 bg-blue-600 text-white' : 'mr-8 bg-gray-100 text-gray-900'
+                          className={`min-w-0 max-w-[min(100%,40rem)] rounded-2xl px-3 py-2.5 text-sm shadow-sm ${
+                            mine
+                              ? 'ml-10 bg-blue-600 text-white rounded-br-md'
+                              : `mr-10 bg-white text-gray-900 border border-gray-200 rounded-bl-md ${hasCard ? 'w-full' : ''}`
                           }`}
                         >
                           {mine ? (
-                            <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                            <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.content}</p>
                           ) : (
-                            <AssistantMarkdown content={m.content} />
+                            <div className="min-w-0">
+                              <AssistantMarkdown content={m.content} />
+                            </div>
                           )}
                           {card ? (
+                            <div className="mt-2 min-w-0 overflow-x-auto">
                             <AssistantOrderDraftCard
                               draft={card}
                               readOnly={readOnly}
@@ -774,8 +803,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
                               serverSimilarMatches={similarByDraft[card.id] || []}
                             />
+                            </div>
                           ) : null}
                           {transferCard ? (
+                            <div className="mt-2 min-w-0 overflow-x-auto">
                             <AssistantTransferDraftCard
                               draft={transferCard}
                               readOnly={readOnly}
@@ -784,8 +815,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               onCancel={(id) => void cancelTransferDraft(id)}
                               onUpdated={() => (openId ? reloadMessages(openId) : Promise.resolve())}
                             />
+                            </div>
                           ) : null}
                           {m.metadata?.kind === 'cancel_preview' && m.metadata.preview ? (
+                            <div className="mt-2 min-w-0">
                             <AssistantCancelCard
                               preview={m.metadata.preview as CancelPreview}
                               state={m.metadata.state}
@@ -796,8 +829,10 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               }
                               onDismiss={() => void dismissCancelCard(m.id)}
                             />
+                            </div>
                           ) : null}
                           {m.metadata?.kind === 'transfer_manage' && m.metadata.preview ? (
+                            <div className="mt-2 min-w-0">
                             <AssistantTransferManageCard
                               preview={m.metadata.preview as TransferManagePreview}
                               state={m.metadata.state}
@@ -806,8 +841,9 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               onConfirm={() => void assistantTransferManage('confirm', m.id)}
                               onDismiss={() => void assistantTransferManage('dismiss', m.id)}
                             />
+                            </div>
                           ) : null}
-                          <p className={`mt-1 text-[11px] ${mine ? 'text-blue-100' : 'text-gray-500'}`}>
+                          <p className={`mt-1.5 text-[11px] ${mine ? 'text-blue-100 text-right' : 'text-gray-500'}`}>
                             {formatMsgTime(m.created_at)}
                           </p>
                         </div>
@@ -817,12 +853,13 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                 )}
                 {waitingAi ? (
                   <div className="flex justify-start">
-                    <div className="mr-8 max-w-[min(100%,36rem)] rounded-2xl bg-gray-100 px-3 py-2 text-sm text-gray-600">
+                    <div className="mr-10 max-w-[min(100%,40rem)] rounded-2xl rounded-bl-md border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-600 shadow-sm">
                       ИИ отвечает…
                     </div>
                   </div>
                 ) : null}
                 <div ref={bottomRef} />
+                </div>
               </div>
               {showJump ? (
                 <button
@@ -832,14 +869,14 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                     setShowJump(false);
                     scrollThreadToEnd();
                   }}
-                  className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-3 py-1.5 text-sm text-white shadow"
+                  className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-3.5 py-2 text-sm font-medium text-white shadow-lg min-h-11"
                 >
                   К новым
                 </button>
               ) : null}
             </div>
             {!readOnly && (
-              <div className="shrink-0 border-t border-gray-100 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2 bg-white">
+              <div className="shrink-0 border-t border-gray-200 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2 bg-white">
                 {error ? <p className="text-sm text-red-700">{error}</p> : null}
                 {retry ? (
                   <button
@@ -866,7 +903,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                     }}
                     rows={2}
                     disabled={busy}
-                    className="min-w-0 flex-1 max-h-32 overflow-y-auto px-3 py-2 border border-gray-300 rounded-xl bg-white text-gray-900 resize-none"
+                    enterKeyHint="send"
+                    onFocus={() => {
+                      if (stickToBottomRef.current) scrollThreadToEnd();
+                    }}
+                    className="min-w-0 flex-1 max-h-32 overflow-y-auto px-3 py-2.5 border border-gray-300 rounded-xl bg-white text-gray-900 resize-none text-base"
                     placeholder="Сообщение"
                   />
                   <button

@@ -125,6 +125,7 @@ if (!chatsUi.includes('min-h-0') || !chatsUi.includes('overflow-hidden') || !cha
   fail('chat pane must use a bounded flex height with inner overflow');
 }
 if (!chatsUi.includes('overscroll-contain')) fail('thread overscroll must stay in the pane');
+if (!chatsUi.includes('ResizeObserver')) fail('thread must follow content height without moving the window');
 if (chatsUi.includes('data-scroll-persist="assistant-thread"')) {
   fail('thread must not restore a mid-history window scroll snapshot');
 }
@@ -151,6 +152,8 @@ if (!adminAssistant.includes('min-h-0') || !managerAssistant.includes('min-h-0')
 if (!adminAssistant.includes('overflow-hidden') || !managerAssistant.includes('overflow-hidden')) {
   fail('assistant pages must not scroll the document behind the chat');
 }
+const css = readFileSync(join(process.cwd(), 'app', 'globals.css'), 'utf8');
+if (!css.includes('html:has(.app-shell-chat)')) fail('document must not scroll behind the chat shell');
 
 const mdUi = readFileSync(join(process.cwd(), 'components', 'AssistantMarkdown.tsx'), 'utf8');
 if (!mdUi.includes('react-markdown')) fail('AssistantMarkdown must use react-markdown');

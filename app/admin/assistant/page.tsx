@@ -9,7 +9,7 @@ export default function AdminAssistantPage() {
   const [audit, setAudit] = useState(false);
   return (
     <Protected role="admin">
-      <div className="app-shell-chat min-h-0 overflow-hidden flex flex-col bg-white">
+      <div className="app-shell-chat min-h-0 overflow-hidden flex flex-col bg-white h-[var(--app-vvh,100dvh)]">
         <div className="shrink-0">
           <NavAdmin />
         </div>

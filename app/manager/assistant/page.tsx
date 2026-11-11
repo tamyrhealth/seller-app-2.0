@@ -7,7 +7,7 @@ import AssistantChats from '@/components/AssistantChats';
 export default function ManagerAssistantPage() {
   return (
     <Protected role="manager">
-      <div className="app-shell-chat min-h-0 overflow-hidden flex flex-col bg-white">
+      <div className="app-shell-chat min-h-0 overflow-hidden flex flex-col bg-white h-[var(--app-vvh,100dvh)]">
         <div className="shrink-0">
           <NavManager />
         </div>

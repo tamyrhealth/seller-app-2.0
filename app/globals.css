@@ -97,4 +97,11 @@ body {
 .app-shell-chat {
   height: var(--app-vvh, 100dvh);
   max-height: var(--app-vvh, 100dvh);
+  overflow: hidden;
+}
+
+html:has(.app-shell-chat),
+body:has(.app-shell-chat) {
+  height: 100%;
+  overflow: hidden;
 }
