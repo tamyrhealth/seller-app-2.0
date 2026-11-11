@@ -133,7 +133,10 @@ export function parseLooseTime(raw: string): string | null {
 
 export function looksLikeInvoice(text: string): boolean {
   const lines = text.split(/\n/).map((s) => s.trim()).filter(Boolean);
-  const hasQty = /(^|\s)\d+([.,]\d+)?(\s|$)/.test(text);
+  const hasQty =
+    /(?:^|\s)\d+(?:[.,]\d+)?(?:\s*(?:шт\.?|штук(?:а|и)?|pcs|дана(?:сы)?|кг|kg|мл|ml|г|g)|\s|$)/iu.test(
+      text
+    );
   const hasWord = /[а-яёәғқңөұүһіa-z]{3,}/i.test(text);
   const keywords =
     /(накладн|заказ|төлен|толен|оплач|долг|қарыз|предзаказ|подарок|сыйлық|kaspi|каспи|налич)/i.test(

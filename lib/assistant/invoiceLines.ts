@@ -85,6 +85,27 @@ function lineLooksLikeQtyItem(line: string): boolean {
   return /\d/.test(line) && /[а-яёәғқңөұүһіa-z]{2,}/i.test(line);
 }
 
+export function looksLikeStockQuestion(text: string): boolean {
+  const raw = String(text || '');
+  if (!/(сколько|қанша|канша|остатк|қалдық|калдык|бар ма|есть ли)/i.test(raw)) return false;
+  const pay = detectPayment(raw);
+  if (pay.payment_type || pay.paid_unspecified || pay.is_debt || pay.paid_status) return false;
+  return parseInvoiceItemLines(raw).length === 0;
+}
+
+/** Seller + qty lines is enough to open a draft. Customer name/phone is optional. */
+export function hasInvoiceDraftSignals(text: string): boolean {
+  const raw = String(text || '');
+  if (looksLikeStockQuestion(raw)) return false;
+  const items = parseInvoiceItemLines(raw);
+  if (items.length === 0) return false;
+  const lines = raw
+    .split(/\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return lines.length >= 2;
+}
+
 export function parseInvoiceItemLines(text: string): ParsedInvoiceItem[] {
   const items: ParsedInvoiceItem[] = [];
   for (const line of String(text || '')

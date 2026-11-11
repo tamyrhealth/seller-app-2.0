@@ -173,7 +173,11 @@ if (!isAssistantRole('manager') || !isAssistantRole('admin')) fail('admin/manage
 
 const sample = `Айгүл 87771234567\n2 порошок\nШай 3\n04.11.2026\n13:45\nТөленген`;
 if (!looksLikeInvoice(sample)) fail('sample packing slip should look like invoice');
+if (!looksLikeInvoice('Айгүл\nшай 3шт\nшампунь 2шт\nдраже 2шт\nТөленген')) {
+  fail('qty glued to шт without customer phone must look like invoice');
+}
 if (looksLikeInvoice('Сколько порошка в Астане?')) fail('stock question is not an invoice');
+if (!handle.includes('hasInvoiceDraftSignals')) fail('draft signals without customer');
 const phones = extractPhones(sample);
 if (!phones.some((p) => p.replace(/\D/g, '').endsWith('7771234567'))) {
   fail('phone extract');

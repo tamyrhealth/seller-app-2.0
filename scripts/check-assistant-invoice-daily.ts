@@ -4,7 +4,13 @@ import { detectPayment, looksLikeInvoice, paymentLabel } from '../lib/assistant/
 import { extractInvoiceCustomer } from '../lib/assistant/customerExtract';
 import { resolveInvoiceFromCatalogs, draftChoiceHints } from '../lib/assistant/invoiceResolve';
 import { sellerMatchesByPhone } from '../lib/assistant/invoiceSeller';
-import { invoiceHeaderSellerName, mergeParsedInvoiceItems, parseInvoiceItemLines } from '../lib/assistant/invoiceLines';
+import {
+  hasInvoiceDraftSignals,
+  invoiceHeaderSellerName,
+  looksLikeStockQuestion,
+  mergeParsedInvoiceItems,
+  parseInvoiceItemLines,
+} from '../lib/assistant/invoiceLines';
 import { resolveProductQuery } from '../lib/assistant/productAliases';
 import { isAssistantRole } from '../lib/roles';
 import type { ParsedInvoice } from '../lib/assistant/invoiceParse';
@@ -255,6 +261,13 @@ if (cancelRoute.includes("rpc('confirm_order'")) fail('draft cancel must not wri
 
 const resolve = read('lib/assistant/resolveOrder.ts');
 if (!resolve.includes('resolveInvoiceFromCatalogs')) fail('catalog resolve');
+const handleTurnSrc = read('lib/assistant/handleTurn.ts');
+if (!handleTurnSrc.includes('hasInvoiceDraftSignals')) fail('turn must open draft without customer phone');
+if (!handleTurnSrc.includes('parseInvoiceItemLines')) fail('turn must use line items even if LLM intent=question');
+const handleTurnBody = handleTurnSrc.slice(handleTurnSrc.indexOf('export async function generateAssistantTurn'));
+if (handleTurnBody.indexOf('parseCancelIntent') > handleTurnBody.indexOf('hasInvoiceDraftSignals')) {
+  fail('cancel must run before invoice draft');
+}
 if (!resolve.includes('availableQty')) fail('invoice stock must use reserved-aware available');
 if (!resolve.includes('qty_reserved')) fail('invoice resolveOrder must select qty_reserved');
 const invoiceResolveSrc = read('lib/assistant/invoiceResolve.ts');
@@ -366,6 +379,12 @@ if (invoiceHeaderSellerName('Айгүл\nпривет, какие остатки
   fail('first line must not become a seller outside an invoice');
 }
 if (looksLikeInvoice('Айгүл\nпривет, какие остатки?')) fail('chat question is not an invoice');
+if (hasInvoiceDraftSignals('Айгүл\nпривет, какие остатки?')) fail('stock chat must not open a draft');
+if (!looksLikeStockQuestion('Айгүл\nпривет, какие остатки?')) fail('остатки question');
+if (!looksLikeStockQuestion('Сколько порошка в Астане?')) fail('stock question');
+if (looksLikeInvoice('Сколько порошка в Астане?')) fail('stock question is not an invoice');
+if (hasInvoiceDraftSignals('Сколько порошка в Астане?')) fail('stock question has no draft signals');
+if (looksLikeStockQuestion('Айгүл\nшай 3шт\nТөленген')) fail('invoice with төленген is not a stock question');
 if (invoiceHeaderSellerName('Айгүл 87771234567\n2 порошок') !== 'Айгүл') {
   fail('packed Айгүл 8777… must still be the seller');
 }
@@ -425,14 +444,14 @@ const smokeStock = new Map([
   ['c1:p-drazhe', 20],
 ]);
 
-function smokeDraft(text: string, llmItems: ParsedInvoice['items'] = []) {
+function smokeDraft(text: string, llmItems: ParsedInvoice['items'] = [], payment_raw = 'Наличка') {
   return resolveInvoiceFromCatalogs(
     {
       intent: 'create_order',
       seller_name: '',
       city_name: '',
       customer_name: '',
-      payment_raw: 'Наличка',
+      payment_raw,
       is_debt: false,
       is_preorder: false,
       pickup_date: '',
@@ -450,6 +469,62 @@ function smokeDraft(text: string, llmItems: ParsedInvoice['items'] = []) {
     }
   );
 }
+
+const prodNoCustomer = `Айгүл
+шай 3шт
+шампунь 2шт
+драже 2шт
+Төленген`;
+if (!looksLikeInvoice(prodNoCustomer)) fail('prod invoice without customer must look like invoice');
+if (!hasInvoiceDraftSignals(prodNoCustomer)) fail('prod invoice without customer must open draft');
+const prodNoCustomerDraft = smokeDraft(prodNoCustomer, [], 'Төленген');
+if (prodNoCustomerDraft.resolved.items.length !== 3) {
+  fail(`prod 3 lines: ${prodNoCustomerDraft.resolved.items.map((i) => i.raw_name).join(',')}`);
+}
+if (!prodNoCustomerDraft.resolved.items.some((i) => i.qty === 3 && i.product_id === 'p-tea' && !i.unresolved)) {
+  fail('prod tea ×3');
+}
+if (!prodNoCustomerDraft.resolved.items.some((i) => i.qty === 2 && i.product_id === 'p-shamp' && !i.unresolved)) {
+  fail('prod shampoo ×2');
+}
+if (!prodNoCustomerDraft.resolved.items.some((i) => i.qty === 2 && i.product_id === 'p-drazhe' && !i.unresolved)) {
+  fail('prod drazhe ×2');
+}
+if (prodNoCustomerDraft.can_confirm) fail('төленген without method cannot confirm');
+if (!prodNoCustomerDraft.errors.some((e) => e.code === 'payment_unspecified')) fail('need payment_unspecified not stock Q&A');
+if (prodNoCustomerDraft.resolved.total_sum !== 3 * 800 + 2 * 450 + 2 * 400) {
+  fail(`prod total ${prodNoCustomerDraft.resolved.total_sum}`);
+}
+
+const prodTwoTea = `Айгүл
+шай 2шт
+шай 1шт
+Төленген`;
+if (!looksLikeInvoice(prodTwoTea) || !hasInvoiceDraftSignals(prodTwoTea)) fail('two tea lines must be an invoice');
+const prodTwoTeaDraft = smokeDraft(
+  prodTwoTea,
+  [{ name: 'ШАЙ ОРГ 500г', qty: 3, is_gift: false }],
+  'Төленген'
+);
+const prodTeaLines = prodTwoTeaDraft.resolved.items.filter((i) => i.product_id === 'p-tea');
+if (prodTeaLines.length !== 2 || prodTeaLines.reduce((s, i) => s + i.qty, 0) !== 3) {
+  fail(`prod two tea lines ${JSON.stringify(prodTeaLines)}`);
+}
+if (prodTwoTeaDraft.can_confirm) fail('two tea төленген still needs payment method');
+
+const prodWithCustomer = `Айгүл
+Айдос 87751234567
+шай 3шт
+шампунь 2шт
+драже 2шт
+Төленген`;
+if (!looksLikeInvoice(prodWithCustomer)) fail('customer line still invoice');
+const prodWithCustomerDraft = smokeDraft(prodWithCustomer, [], 'Төленген');
+if (prodWithCustomerDraft.resolved.items.length !== 3) fail('customer invoice keeps 3 items');
+if (prodWithCustomerDraft.resolved.customer_phone !== '+77751234567') {
+  fail(`customer phone ${prodWithCustomerDraft.resolved.customer_phone}`);
+}
+if (prodWithCustomerDraft.can_confirm) fail('төленген with customer still needs Kaspi/cash');
 
 const aigulSht = smokeDraft(`Айгүл
 Анар 87071234567
@@ -674,6 +749,8 @@ if (resolve.includes('parsed.is_preorder === true || keywords.is_preorder')) {
 const parse = read('lib/assistant/invoiceParse.ts');
 if (!parse.includes('это НЕ Kaspi')) fail('parse prompt paid vs method');
 if (!parse.includes('qty может стоять до или после')) fail('parse prompt qty both sides');
+if (!parse.includes('Клиент и телефон НЕ обязательны')) fail('parse prompt customer optional');
+if (!parse.includes('НЕ отвечай остатками')) fail('parse prompt must not route invoices to stock Q&A');
 const lines = read('lib/assistant/invoiceLines.ts');
 if (!lines.includes('invoiceHeaderSellerName')) fail('header seller extractor');
 if (!lines.includes('mergeParsedInvoiceItems')) fail('keep mergeParsedInvoiceItems');

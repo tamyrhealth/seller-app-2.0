@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
 import { looksLikeInvoice, extractPhones } from '@/lib/assistant/paymentParse';
+import { hasInvoiceDraftSignals, parseInvoiceItemLines } from '@/lib/assistant/invoiceLines';
 import { parseInvoiceStructured } from '@/lib/assistant/invoiceParse';
 import { generateAssistantReply } from '@/lib/assistant/runModel';
 import { resolveInvoiceDraft } from '@/lib/assistant/resolveOrder';
@@ -99,9 +100,11 @@ export async function generateAssistantTurn(
     return { content: resolved.content, draft: null, transfer, cancel: null, transferManage: null };
   }
 
-  if (looksLikeInvoice(userText)) {
+  const lineItems = parseInvoiceItemLines(userText);
+  if (looksLikeInvoice(userText) || hasInvoiceDraftSignals(userText)) {
     const parsed = await parseInvoiceStructured(userText, Math.max(3000, remaining() - 8000));
-    if (parsed.intent === 'create_order' || parsed.items.length > 0) {
+    if (lineItems.length > 0) parsed.intent = 'create_order';
+    if (parsed.intent === 'create_order' || parsed.items.length > 0 || lineItems.length > 0) {
       const phones = extractPhones(userText);
       const resolved = await resolveInvoiceDraft(db, parsed, userText, phones);
       const draft: TurnDraft = {
