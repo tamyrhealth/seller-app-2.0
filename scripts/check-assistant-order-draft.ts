@@ -74,6 +74,9 @@ if (!runModel.includes('stripIdentifiers')) fail('Q&A history must mask phones')
 if (!handle.includes('looksLikeInvoice')) fail('invoice heuristic');
 if (!read('app/api/assistant/chat/route.ts').includes('findReusableInvoiceDraft')) fail('same-chat invoice reuse');
 if (!read('components/AssistantChats.tsx').includes('Это новый заказ')) fail('force-new invoice button');
+if (!read('components/AssistantChats.tsx').includes('liveDraftForAssistantMessage')) {
+  fail('reuse cards must share the live draft row');
+}
 if (!handle.includes('parseInvoiceStructured')) fail('structured parse on invoice path');
 if (!handle.includes('resolveInvoiceDraft')) fail('server-side resolve');
 if (!handle.includes('buildDraftChatMessage')) fail('short draft chat message');

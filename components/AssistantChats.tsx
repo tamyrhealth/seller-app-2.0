@@ -20,6 +20,13 @@ import type { AssistantTransferDraftRow } from '@/lib/assistant/transferTypes';
 import type { CancelPreview } from '@/lib/assistant/cancelTypes';
 import type { TransferManagePreview } from '@/lib/assistant/transferManageTypes';
 import { resolveCancelCardState } from '@/lib/assistant/cancelCardState';
+import {
+  liveDraftForAssistantMessage,
+  markDraftConfirmed,
+  markDraftConfirming,
+  revertDraftIfUnconfirmed,
+  shouldPatchDraftConfirmed,
+} from '@/lib/assistant/draftCardSync';
 import { readUserUi, writeUserUi } from '@/lib/uiStorage';
 
 type ChatRow = {
@@ -526,7 +533,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     const token = sessionData.session?.access_token;
     if (!token) {
       setError('Сессия истекла. Войдите снова.');
-      return 'error' as const;
+      return { status: 'error' as const };
     }
     const res = await fetch(`/api/assistant/orders/${path}`, {
       method: 'POST',
@@ -543,14 +550,25 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
       pending?: boolean;
       code?: string;
       matches?: SimilarOrderMatch[];
+      order_id?: string;
+      order_number?: string;
     };
+    if (
+      shouldPatchDraftConfirmed({
+        path,
+        okHttp: res.ok,
+        payload,
+      })
+    ) {
+      setDrafts((prev) => markDraftConfirmed(prev, draftId, payload));
+    }
     if (openId) {
       await reloadMessages(openId);
       await loadChats();
     }
     if (res.status === 202 || payload.pending) {
       setError(payload.message || 'Заказ ещё обрабатывается. Повторите подтверждение.');
-      return 'pending' as const;
+      return { status: 'pending' as const };
     }
     if (res.status === 409 && payload.code === 'similar_orders') {
       const matches = Array.isArray(payload.matches) ? payload.matches : [];
@@ -560,15 +578,15 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
         payload.message ||
           `Похожий заказ уже есть: ${numbers || 'без номера'}. Откройте существующий или нажмите «Это другой заказ — продолжить».`
       );
-      return 'similar' as const;
+      return { status: 'similar' as const };
     }
     if (res.status === 503 && payload.code === 'sql_missing') {
       setError(payload.message || formatSimilarLookupError(payload.message));
-      return 'error' as const;
+      return { status: 'error' as const };
     }
     if (!res.ok || payload.ok === false) {
       setError(payload.message || 'Не удалось выполнить действие с заказом.');
-      return 'error' as const;
+      return { status: 'error' as const };
     }
     setError('');
     setSimilarByDraft((prev) => {
@@ -576,24 +594,44 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
       delete next[draftId];
       return next;
     });
-    return 'ok' as const;
+    return {
+      status: 'ok' as const,
+      order_id: payload.order_id,
+      order_number: payload.order_number,
+    };
   }
 
   async function confirmDraft(
     draftId: string,
     opts?: { acknowledgedSimilarIds?: string[]; acknowledgedComposition?: string }
   ) {
-    if (readOnly || busy) return;
+    if (readOnly) return;
     setBusy(true);
+    let previous: AssistantDraftRow | undefined;
+    setDrafts((prev) => {
+      previous = prev.find((row) => row.id === draftId);
+      return markDraftConfirming(prev, draftId);
+    });
     try {
       await runExclusive(`assistant-order-confirm:${draftId}`, async () => {
         const first = await assistantOrderAction('confirm', draftId, opts);
-        if (first !== 'pending') return;
+        if (first.status === 'error' || first.status === 'similar') {
+          const snapshot = previous;
+          if (snapshot) setDrafts((prev) => revertDraftIfUnconfirmed(prev, draftId, snapshot));
+          return;
+        }
+        if (first.status !== 'pending') return;
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        await assistantOrderAction('confirm', draftId, opts);
+        const second = await assistantOrderAction('confirm', draftId, opts);
+        if (second.status === 'error' || second.status === 'similar') {
+          const snapshot = previous;
+          if (snapshot) setDrafts((prev) => revertDraftIfUnconfirmed(prev, draftId, snapshot));
+        }
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сеть недоступна.');
+      const snapshot = previous;
+      if (snapshot) setDrafts((prev) => revertDraftIfUnconfirmed(prev, draftId, snapshot));
     } finally {
       setBusy(false);
     }
@@ -804,14 +842,7 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                 ) : (
                   messages.map((m) => {
                     const mine = m.role === 'user';
-                    const card =
-                      !mine
-                        ? drafts.find(
-                            (row) =>
-                              row.assistant_message_id === m.id ||
-                              row.id === m.metadata?.draft_id
-                          )
-                        : undefined;
+                    const card = !mine ? liveDraftForAssistantMessage(drafts, m) : undefined;
                     const transferCard =
                       !mine
                         ? transferDrafts.find(

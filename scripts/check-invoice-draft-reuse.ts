@@ -198,6 +198,9 @@ if (chat.includes("rpc('confirm_order'")) fail('chat must not confirm_order');
 const ui = read('components/AssistantChats.tsx');
 if (!ui.includes('Это новый заказ')) fail('UI force-new button');
 if (!ui.includes('forceNewInvoiceDraft')) fail('UI must send force-new flag');
+if (!ui.includes('liveDraftForAssistantMessage')) fail('reuse cards must share one live draft');
+if (!ui.includes('markDraftConfirmed')) fail('confirm must sync every bound card');
+if (!ui.includes('revertDraftIfUnconfirmed')) fail('confirm error must not leave a false confirmed card');
 
 const handle = read('lib/assistant/handleTurn.ts');
 if (!handle.includes('randomUUID()')) fail('new drafts still mint a key before reuse overlay');

@@ -16,6 +16,7 @@ import {
 } from '@/lib/similarOrders';
 import { useAuth } from '@/lib/auth';
 import { draftChoiceHints } from '@/lib/assistant/invoiceResolve';
+import { confirmedOrderLabel } from '@/lib/assistant/draftCardSync';
 
 function money(n: number) {
   return new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(n);
@@ -225,6 +226,7 @@ export default function AssistantOrderDraftCard({
   ]);
 
   async function requestConfirm(ackOverride?: SimilarAck | null) {
+    if (readOnly || locked || done) return;
     const seller = draft.resolved?.seller_id || '';
     const city = draft.resolved?.city_id || '';
     const items = (draft.resolved?.items || [])
@@ -487,8 +489,10 @@ export default function AssistantOrderDraftCard({
   return (
     <div className="mt-2 rounded-xl border border-gray-300 bg-white p-3 text-gray-900">
       <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Предварительный заказ</p>
-      {done && draft.order_number ? (
-        <p className="mt-1 text-sm font-medium text-green-800">Заказ {draft.order_number} успешно создан</p>
+      {done ? (
+        <p className="mt-1 text-sm font-medium text-green-800">
+          {confirmedOrderLabel(draft.order_number, draft.order_id)}
+        </p>
       ) : null}
       {pending ? <p className="mt-1 text-sm text-amber-800">Заказ обрабатывается, статус ещё не подтверждён.</p> : null}
       {draft.status === 'cancelled' ? <p className="mt-1 text-sm text-gray-600">Черновик отменён.</p> : null}
@@ -790,7 +794,7 @@ export default function AssistantOrderDraftCard({
           />
         </div>
       ) : null}
-      {!readOnly && !done && draft.status !== 'cancelled' ? (
+      {!readOnly && !done && !pending && draft.status !== 'cancelled' ? (
         <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <button
             type="button"
