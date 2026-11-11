@@ -736,6 +736,16 @@ const ru: Dict = {
   'finance.overdueAmount': 'Просроченная сумма',
   'finance.last90': 'Последние 90 дней',
   'finance.thisYear': 'Текущий год',
+  'finance.profitAndCash': 'Прибыль и деньги',
+  'finance.profitAndCashHint':
+    'Признание выручки не означает, что деньги поступили. Кассового журнала нет — полный Cash In не рассчитывается.',
+  'finance.cashIn': 'Денежные поступления',
+  'finance.cashInIncomplete': 'Данные о поступлениях неполные',
+  'finance.cashInIncompleteHint':
+    'Нет журнала оплат. Confirm наличных/Kaspi и дата выдачи предзаказа не являются поступлением. Частичных оплат нет.',
+  'finance.debtCollections': 'Погашения долгов за период',
+  'finance.debtCollectionsHint': 'Единственная датированная сумма: долг со статусом paid и debt_paid_at. Это не весь Cash In.',
+  'finance.sellerPayoutsPeriod': 'Выплаты продавцам',
   'finance.revenue': 'Признанная выручка',
   'finance.orderCount': 'Признанных продаж',
   'finance.avgCheck': 'Средний чек',
@@ -1593,6 +1603,16 @@ const kz: Dict = {
   'finance.overdueAmount': 'Мерзімі өткен сома',
   'finance.last90': 'Соңғы 90 күн',
   'finance.thisYear': 'Ағымдағы жыл',
+  'finance.profitAndCash': 'Пайда және ақша',
+  'finance.profitAndCashHint':
+    'Түсімді мойындау ақша түсті деген сөз емес. Касса журналы жоқ — толық Cash In есептелмейді.',
+  'finance.cashIn': 'Ақша түсімі',
+  'finance.cashInIncomplete': 'Түсім деректері толық емес',
+  'finance.cashInIncompleteHint':
+    'Төлем журналы жоқ. Нал/Kaspi confirm және предзаказ беру күні түсім емес. Ішінара төлем жоқ.',
+  'finance.debtCollections': 'Кезеңдегі қарыз өтеуі',
+  'finance.debtCollectionsHint': 'Жалғыз даталы сома: paid мәртебесі және debt_paid_at. Бұл бүкіл Cash In емес.',
+  'finance.sellerPayoutsPeriod': 'Сатушыға төлем',
   'finance.revenue': 'Мойындалған түсім',
   'finance.orderCount': 'Мойындалған сатылым',
   'finance.avgCheck': 'Орташа чек',

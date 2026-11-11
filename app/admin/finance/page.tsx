@@ -62,6 +62,7 @@ import {
   type FinancePeriodMode,
   type FinanceSellerSort,
 } from '@/lib/adminFinanceView';
+import { buildCashInReport } from '@/lib/financeCashIn';
 import type { ProductCostRow } from '@/lib/productCost';
 import {
   CartesianGrid,
@@ -396,6 +397,11 @@ export default function AdminFinancePage() {
   );
 
   const companyExpenses = useMemo(() => expensesForCityView(expenses, cityId).companyExpenses, [expenses, cityId]);
+  const cashIn = useMemo(() => {
+    if (!spec) return null;
+    return buildCashInReport(ordersForCityView(orders, cityId), spec.range);
+  }, [spec, orders, cityId]);
+
   const daily = useMemo(() => {
     if (!spec || !report) return [];
     return buildFinanceDaily({
@@ -691,6 +697,48 @@ export default function AdminFinancePage() {
                   {journalEmpty && !report.expensesComplete ? <p>{t('finance.warnJournalEmpty')}</p> : null}
                 </div>
               ) : null}
+
+              <Section title={t('finance.profitAndCash')} hint={t('finance.profitAndCashHint')}>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <KpiCard label={t('finance.revenue')} value={`${formatMoney(report.revenue)} ₸`} />
+                  <KpiCard
+                    label={t('finance.cashIn')}
+                    value={t('finance.cashInIncomplete')}
+                    hint={t('finance.cashInIncompleteHint')}
+                  />
+                  <KpiCard
+                    label={t('finance.debtCollections')}
+                    value={`${formatMoney(cashIn?.verifiedDebtCollections || 0)} ₸`}
+                    hint={t('finance.debtCollectionsHint')}
+                  />
+                  <KpiCard
+                    label={t('finance.receivables')}
+                    value={`${formatMoney(receivables.unpaidDebtAmount)} ₸`}
+                    hint={t('finance.receivablesAsOfNow')}
+                  />
+                  {companyPnl ? (
+                    <KpiCard
+                      label={t('finance.sellerPayoutsPeriod')}
+                      value={`${formatMoney(report.cashPayouts)} ₸`}
+                      hint={t('finance.settlementsHint')}
+                    />
+                  ) : null}
+                  <KpiCard
+                    label={report.cityScoped ? t('finance.cityOpex') : t('finance.otherOpex')}
+                    value={opexKpi.kind === 'unavailable' ? t('finance.expensesNotEntered') : kpiText(opexKpi)}
+                    hint={kpiHint(opexKpi)}
+                  />
+                  {companyPnl ? (
+                    <KpiCard label={t('finance.net')} value={kpiText(netKpi)} hint={kpiHint(netKpi)} />
+                  ) : (
+                    <KpiCard
+                      label={t('finance.net')}
+                      value={t('finance.unavailable')}
+                      hint={t('finance.cityOperational')}
+                    />
+                  )}
+                </div>
+              </Section>
 
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <KpiCard label={t('finance.revenue')} value={`${formatMoney(report.revenue)} ₸`} />

@@ -866,6 +866,10 @@ const i18n = read('lib/i18n.tsx');
 const managerNav = read('components/NavManager.tsx');
 if (!existsSync(join(process.cwd(), 'app/admin/finance/page.tsx'))) fail('finance page missing');
 if (!page.includes('Protected role="admin"')) fail('admin-only finance page');
+if (!page.includes('finance.cashInIncomplete') || !page.includes('buildCashInReport')) {
+  fail('profit vs cash: incomplete inflows, no invented Cash In');
+}
+if (!page.includes('finance.profitAndCash')) fail('profit vs cash section');
 if (!page.includes('bg-slate-50') || !page.includes('rounded-2xl') || !page.includes('max-w-6xl')) fail('dashboard visual language');
 if (!page.includes('grid-cols-2') || !page.includes('lg:grid-cols-4')) fail('kpi grid');
 if (!page.includes('FINANCE_PERIOD_PRESETS') || !page.includes("setMode(p.id)")) fail('period chips');
