@@ -2,6 +2,12 @@ import { NextResponse } from 'next/server';
 import { isAssistantRole } from '@/lib/roles';
 import { ASSISTANT_USER_MESSAGE_MAX } from '@/lib/assistant/limits';
 import { generateAssistantTurn } from '@/lib/assistant/handleTurn';
+import {
+  buildInvoiceDraftFingerprint,
+  findReusableInvoiceDraft,
+  invoiceReuseChatMessage,
+  type InvoiceDraftReuseRow,
+} from '@/lib/assistant/invoiceDraftFingerprint';
 import { parseCancelIntent } from '@/lib/assistant/cancelIntent';
 import { parseTransferIntent } from '@/lib/assistant/transferIntent';
 import { parseTransferManageIntent } from '@/lib/assistant/transferManageIntent';
@@ -30,7 +36,7 @@ export async function POST(req: Request) {
   const token = readBearerToken(req);
   if (!token) return jsonError(401, 'unauthorized', 'Нужна авторизация.');
 
-  let body: { chatId?: string; content?: string; clientMessageId?: string };
+  let body: { chatId?: string; content?: string; clientMessageId?: string; forceNewInvoiceDraft?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -189,7 +195,36 @@ export async function POST(req: Request) {
       can_manage_transfers: (profile as { can_manage_transfers?: boolean }).can_manage_transfers === true,
     });
     let text = turn.content;
-    if (turn.draft) {
+    const forceNewInvoiceDraft = body.forceNewInvoiceDraft === true;
+    let skipDraftSave = false;
+    if (turn.draft && !forceNewInvoiceDraft) {
+      const { data: existingDrafts } = await service
+        .from('assistant_order_drafts')
+        .select(
+          'id, status, idempotency_key, order_id, order_number, resolved, customer_phone, created_at'
+        )
+        .eq('chat_id', chatId)
+        .eq('owner_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      const fingerprint = buildInvoiceDraftFingerprint(turn.draft.resolved);
+      const hit = findReusableInvoiceDraft((existingDrafts || []) as InvoiceDraftReuseRow[], fingerprint);
+      if (hit?.row.idempotency_key) {
+        turn.draft.id = hit.row.id;
+        turn.draft.idempotency_key = String(hit.row.idempotency_key);
+        turn.draft.reuse = hit.kind;
+        turn.draft.order_id = hit.row.order_id || null;
+        turn.draft.order_number = hit.row.order_number || null;
+        text = invoiceReuseChatMessage(hit);
+        if (hit.kind === 'confirmed') {
+          turn.draft.can_confirm = false;
+          skipDraftSave = true;
+        } else if (hit.row.status === 'confirming') {
+          skipDraftSave = true;
+        }
+      }
+    }
+    if (turn.draft && !skipDraftSave) {
       const { error: saveErr } = await service.rpc('save_assistant_order_draft', {
         p_id: turn.draft.id,
         p_chat_id: chatId,
@@ -206,7 +241,9 @@ export async function POST(req: Request) {
         p_idempotency_key: turn.draft.idempotency_key,
       });
       if (saveErr) {
-        if (/assistant_order_drafts|save_assistant_order_draft|schema cache/i.test(saveErr.message)) {
+        if (/draft_not_writable/i.test(saveErr.message) && turn.draft.reuse) {
+          skipDraftSave = true;
+        } else if (/assistant_order_drafts|save_assistant_order_draft|schema cache/i.test(saveErr.message)) {
           text += '\n\nЧерновик заказа не сохранён: сначала примените SQL этапа 5.2.2.';
           turn.draft = null;
         } else {
@@ -267,6 +304,10 @@ export async function POST(req: Request) {
             request_id: clientMessageId,
             kind: 'order_draft',
             draft_id: turn.draft.id,
+            reuse: turn.draft.reuse || null,
+            order_id: turn.draft.order_id || null,
+            order_number: turn.draft.order_number || null,
+            replay_content: storedContent,
           },
         })
         .eq('id', assistantMessageId);

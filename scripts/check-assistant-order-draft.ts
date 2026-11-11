@@ -72,6 +72,8 @@ if (!parse.includes('json_schema')) fail('structured outputs required');
 if (!parse.includes('maskTextForModel') && !parse.includes('stripIdentifiers')) fail('parse must mask before OpenAI');
 if (!runModel.includes('stripIdentifiers')) fail('Q&A history must mask phones');
 if (!handle.includes('looksLikeInvoice')) fail('invoice heuristic');
+if (!read('app/api/assistant/chat/route.ts').includes('findReusableInvoiceDraft')) fail('same-chat invoice reuse');
+if (!read('components/AssistantChats.tsx').includes('Это новый заказ')) fail('force-new invoice button');
 if (!handle.includes('parseInvoiceStructured')) fail('structured parse on invoice path');
 if (!handle.includes('resolveInvoiceDraft')) fail('server-side resolve');
 if (!handle.includes('buildDraftChatMessage')) fail('short draft chat message');

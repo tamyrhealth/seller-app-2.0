@@ -43,6 +43,9 @@ type MsgRow = {
     state?: string;
     preview?: CancelPreview | TransferManagePreview;
     order_id?: string;
+    order_number?: string;
+    reuse?: 'open' | 'confirmed' | null;
+    replay_content?: string;
     source?: string;
     already_canceled?: boolean;
   };
@@ -82,7 +85,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [waitingAi, setWaitingAi] = useState(false);
-  const [retry, setRetry] = useState<{ content: string; clientMessageId: string } | null>(null);
+  const [retry, setRetry] = useState<{
+    content: string;
+    clientMessageId: string;
+    forceNewInvoiceDraft?: boolean;
+  } | null>(null);
   const [drafts, setDrafts] = useState<AssistantDraftRow[]>([]);
   const [similarByDraft, setSimilarByDraft] = useState<Record<string, SimilarOrderMatch[]>>({});
   const [transferDrafts, setTransferDrafts] = useState<AssistantTransferDraftRow[]>([]);
@@ -375,12 +382,17 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     await reloadDrafts(chatId);
   }
 
-  async function requestAssistant(chatId: string, content: string, clientMessageId: string) {
+  async function requestAssistant(
+    chatId: string,
+    content: string,
+    clientMessageId: string,
+    forceNewInvoiceDraft = false
+  ) {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
     if (!token) {
       setError('Сессия истекла. Войдите снова.');
-      setRetry({ content, clientMessageId });
+      setRetry({ content, clientMessageId, forceNewInvoiceDraft });
       return;
     }
     const res = await fetch('/api/assistant/chat', {
@@ -389,7 +401,12 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ chatId, content, clientMessageId }),
+      body: JSON.stringify({
+        chatId,
+        content,
+        clientMessageId,
+        forceNewInvoiceDraft: forceNewInvoiceDraft === true,
+      }),
     });
     const payload = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
@@ -400,7 +417,9 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     await loadChats();
     if (!res.ok || payload.ok === false) {
       setError(payload.message || 'Не удалось получить ответ ИИ.');
-      if (payload.retryable !== false) setRetry({ content, clientMessageId });
+      if (payload.retryable !== false) {
+        setRetry({ content, clientMessageId, forceNewInvoiceDraft });
+      }
       else setRetry(null);
       return;
     }
@@ -656,7 +675,11 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
     }
   }
 
-  async function send(existing?: { content: string; clientMessageId: string }) {
+  async function send(existing?: {
+    content: string;
+    clientMessageId?: string;
+    forceNewInvoiceDraft?: boolean;
+  }) {
     if (!openId || !profile?.id || readOnly || busy || sendingRef.current) return;
     const content = (existing?.content || draft).trim();
     if (!content) return;
@@ -672,10 +695,12 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
       if (openId) draftsByChatRef.current[openId] = '';
     }
     try {
-      await runExclusive(`assistant-send:${openId}`, () => requestAssistant(openId, content, clientMessageId));
+      await runExclusive(`assistant-send:${openId}`, () =>
+        requestAssistant(openId, content, clientMessageId, existing?.forceNewInvoiceDraft === true)
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сеть недоступна.');
-      setRetry({ content, clientMessageId });
+      setRetry({ content, clientMessageId, forceNewInvoiceDraft: existing?.forceNewInvoiceDraft === true });
       await reloadMessages(openId);
     } finally {
       sendingRef.current = false;
@@ -817,6 +842,21 @@ export default function AssistantChats({ audit = false }: { audit?: boolean }) {
                               <AssistantMarkdown content={m.content} />
                             </div>
                           )}
+                          {m.metadata?.reuse && m.metadata.replay_content && !readOnly ? (
+                            <button
+                              type="button"
+                              className="mt-2 text-sm text-blue-700 underline"
+                              disabled={busy}
+                              onClick={() =>
+                                void send({
+                                  content: String(m.metadata?.replay_content || ''),
+                                  forceNewInvoiceDraft: true,
+                                })
+                              }
+                            >
+                              Это новый заказ
+                            </button>
+                          ) : null}
                           {card ? (
                             <div className="mt-2 min-w-0 overflow-x-auto">
                             <AssistantOrderDraftCard

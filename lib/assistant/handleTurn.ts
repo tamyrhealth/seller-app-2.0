@@ -38,6 +38,9 @@ export type TurnDraft = {
   preview: DraftPreview;
   customer_phone: string | null;
   idempotency_key: string;
+  reuse?: 'open' | 'confirmed';
+  order_id?: string | null;
+  order_number?: string | null;
 };
 
 export type TurnTransferDraft = {
