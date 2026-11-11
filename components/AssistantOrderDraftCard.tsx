@@ -167,7 +167,7 @@ export default function AssistantOrderDraftCard({
       })),
   });
 
-  const choiceHints = draftChoiceHints(draft.errors || []);
+  const choiceHints = draftChoiceHints([...(draft.errors || []), ...(draft.warnings || [])]);
   const needsPaymentPick =
     (draft.errors || []).some((e) =>
       ['payment_unspecified', 'payment_missing', 'payment_ambiguous'].includes(e.code)
@@ -712,6 +712,7 @@ export default function AssistantOrderDraftCard({
                     {item.is_gift ? ' (подарок)' : ''} × {item.qty}
                     {item.unresolved === true ? (
                       <div className="mt-1">
+                        <p className="text-xs text-red-700">Не распознан. Исходная строка: {item.name}. Выберите товар.</p>
                         <DraftProductPicker
                           rawName={item.name}
                           selectedId=""

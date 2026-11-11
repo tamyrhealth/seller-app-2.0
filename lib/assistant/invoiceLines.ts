@@ -5,8 +5,10 @@ const PHONE_CHUNK = /(?:\+?\d[\d\t ().-]{7,}\d)/;
 const DATE_LINE = /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/;
 const TIME_LINE = /^\d{1,2}:\d{2}$/;
 const QTY = '(\\d+(?:[.,]\\d+)?)';
-const QTY_FIRST = new RegExp(`^${QTY}\\s+(.+)$`);
-const QTY_LAST = new RegExp(`^(.+?)\\s+${QTY}$`);
+const UNIT = '(?:шт\\.?|штук(?:а|и)?|pcs|дана(?:сы)?|кг|kg|мл|ml|г|g)?';
+const QTY_TOKEN = `${QTY}\\s*${UNIT}`;
+const QTY_FIRST = new RegExp(`^${QTY_TOKEN}\\s+(.+)$`, 'iu');
+const QTY_LAST = new RegExp(`^(.+?)\\s+${QTY_TOKEN}$`, 'iu');
 
 const META_NAME =
   /^(продавец|сатушы|клиент|покупатель|город|қала|оплата|төлем)$/i;
@@ -45,6 +47,7 @@ function cleanItemName(raw: string): string | null {
   const gift = /(подарок|сыйлық|сыйлык)/i.test(name);
   name = name
     .replace(/\b(подарок|сыйлық|сыйлык)\b/gi, ' ')
+    .replace(/\b(шт\.?|штук(?:а|и)?|pcs|дана(?:сы)?)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!name || isInvoiceMetaLine(name)) return null;
@@ -78,16 +81,50 @@ export function parseInvoiceItemLine(raw: string): ParsedInvoiceItem | null {
   return { name, qty, is_gift: lineGift(line) };
 }
 
+function lineLooksLikeQtyItem(line: string): boolean {
+  return /\d/.test(line) && /[а-яёәғқңөұүһіa-z]{2,}/i.test(line);
+}
+
 export function parseInvoiceItemLines(text: string): ParsedInvoiceItem[] {
   const items: ParsedInvoiceItem[] = [];
   for (const line of String(text || '')
     .split(/\n/)
     .map((s) => s.trim())
     .filter(Boolean)) {
+    if (isInvoiceMetaLine(line) || lineHasPhone(line)) continue;
     const item = parseInvoiceItemLine(line);
-    if (item) items.push(item);
+    if (item) {
+      items.push(item);
+      continue;
+    }
+    if (!lineLooksLikeQtyItem(line)) continue;
+    const loose = /(\d+(?:[.,]\d+)?)/.exec(line);
+    const qty = loose ? parseQty(loose[1]) : 1;
+    const name = cleanItemName(
+      line.replace(/\d+(?:[.,]\d+)?\s*(?:шт\.?|штук(?:а|и)?|pcs|дана(?:сы)?)?/iu, ' ')
+    );
+    if (!name || qty == null) continue;
+    items.push({ name, qty, is_gift: lineGift(line) });
   }
   return items;
+}
+
+export function mergeParsedInvoiceItems(
+  lineItems: ParsedInvoiceItem[],
+  modelItems: ParsedInvoiceItem[]
+): ParsedInvoiceItem[] {
+  const out = [...lineItems];
+  const seen = new Set(out.map((item) => item.name.toLowerCase().replace(/\s+/g, ' ')));
+  for (const item of modelItems || []) {
+    const key = String(item?.name || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 export function invoiceHeaderSellerName(text: string): string | null {

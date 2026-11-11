@@ -3,6 +3,7 @@ import type { ParsedInvoice } from '@/lib/assistant/invoiceParse';
 import { resolveProductQuery, type CatalogProduct } from '@/lib/assistant/productAliases';
 import type { CityMatchRow, SellerMatchRow } from '@/lib/assistant/sellerCityMatch';
 import { parseInvoiceItemLines } from '@/lib/assistant/invoiceLines';
+import type { ParsedInvoiceItem } from '@/lib/assistant/invoiceParse';
 import { resolveInvoiceSeller } from '@/lib/assistant/invoiceSeller';
 import {
   detectPayment,
@@ -76,6 +77,154 @@ function stockKey(cityId: string, productId: string) {
   return `${cityId}:${productId}`;
 }
 
+function invoiceItemNameKey(name: string): string {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function draftItemFromParsed(raw: ParsedInvoiceItem, products: CatalogProduct[]): DraftItemResolved {
+  const matched = resolveProductQuery(raw.name, products);
+  const qty = Number(raw.qty);
+  const chosen = matched.chosen;
+  const unresolved = !chosen;
+  const qtySafe = Number.isFinite(qty) ? qty : 0;
+  const price = raw.is_gift ? 0 : unresolved ? 0 : Number(chosen?.price_retail || 0);
+  return {
+    raw_name: raw.name,
+    product_id: chosen?.id || null,
+    product_name: chosen?.name || null,
+    unit: chosen?.unit || null,
+    qty: qtySafe,
+    price,
+    is_gift: raw.is_gift === true,
+    stock: null,
+    line_sum: unresolved ? 0 : qtySafe * price,
+    unresolved,
+    candidates:
+      !chosen && matched.candidates.length
+        ? matched.candidates.slice(0, 5).map((p) => ({
+            id: p.id,
+            name: p.name,
+            price: Number(p.price_retail || 0),
+          }))
+        : undefined,
+  };
+}
+
+function keepLineQtyWithSku(line: DraftItemResolved, sku: DraftItemResolved): DraftItemResolved {
+  const price = line.is_gift ? 0 : Number(sku.price || 0);
+  const resolved = Boolean(sku.product_id) && !sku.unresolved;
+  return {
+    ...sku,
+    raw_name: line.raw_name,
+    qty: line.qty,
+    is_gift: line.is_gift,
+    price,
+    line_sum: resolved && !line.is_gift ? line.qty * price : 0,
+    unresolved: !resolved,
+    candidates: resolved ? undefined : sku.candidates || line.candidates,
+    stock: null,
+  };
+}
+
+/** Line-parser rows win on qty. LLM may recover missing SKUs or uniquely fill one ambiguous line. */
+export function mergeLineAndLlmDraftItems(
+  lineItems: DraftItemResolved[],
+  llmItems: DraftItemResolved[]
+): { items: DraftItemResolved[]; mergeAmbiguous: boolean } {
+  const items: DraftItemResolved[] = lineItems.map((item) => ({
+    ...item,
+    candidates: item.candidates ? [...item.candidates] : undefined,
+  }));
+  const usedLlm = new Set<number>();
+  let mergeAmbiguous = false;
+  const lineNames = new Set(lineItems.map((item) => invoiceItemNameKey(item.raw_name)).filter(Boolean));
+
+  llmItems.forEach((llm, idx) => {
+    if (lineNames.has(invoiceItemNameKey(llm.raw_name))) usedLlm.add(idx);
+  });
+
+  const skuPairs: { lineIdx: number; llmIdx: number }[] = [];
+  items.forEach((line, lineIdx) => {
+    if (!line.unresolved || !line.candidates?.length) return;
+    const cand = new Set(line.candidates.map((c) => c.id));
+    llmItems.forEach((llm, llmIdx) => {
+      if (usedLlm.has(llmIdx) || !llm.product_id || !cand.has(llm.product_id)) return;
+      skuPairs.push({ lineIdx, llmIdx });
+    });
+  });
+  const llmHitCount = new Map<number, number>();
+  const lineHitCount = new Map<number, number>();
+  for (const pair of skuPairs) {
+    llmHitCount.set(pair.llmIdx, (llmHitCount.get(pair.llmIdx) || 0) + 1);
+    lineHitCount.set(pair.lineIdx, (lineHitCount.get(pair.lineIdx) || 0) + 1);
+  }
+  for (const pair of skuPairs) {
+    const oneToOne = lineHitCount.get(pair.lineIdx) === 1 && llmHitCount.get(pair.llmIdx) === 1;
+    usedLlm.add(pair.llmIdx);
+    if (oneToOne) {
+      items[pair.lineIdx] = keepLineQtyWithSku(items[pair.lineIdx], llmItems[pair.llmIdx]);
+    } else {
+      mergeAmbiguous = true;
+    }
+  }
+
+  llmItems.forEach((llm, idx) => {
+    if (usedLlm.has(idx)) return;
+    if (lineNames.has(invoiceItemNameKey(llm.raw_name))) return;
+    if (llm.product_id && items.some((item) => item.product_id === llm.product_id)) return;
+    if (llm.product_id) {
+      const overlap = items
+        .map((item, itemIdx) => ({ item, itemIdx }))
+        .filter(({ item }) => item.unresolved && item.candidates?.some((c) => c.id === llm.product_id));
+      if (overlap.length > 1) {
+        mergeAmbiguous = true;
+        return;
+      }
+      if (overlap.length === 1) {
+        items[overlap[0].itemIdx] = keepLineQtyWithSku(overlap[0].item, llm);
+        return;
+      }
+    } else {
+      const candIds = new Set((llm.candidates || []).map((c) => c.id));
+      if (candIds.size) {
+        const overlap = items.filter(
+          (item) =>
+            (item.product_id && candIds.has(item.product_id)) || item.candidates?.some((c) => candIds.has(c.id))
+        );
+        if (overlap.length > 1) {
+          mergeAmbiguous = true;
+          return;
+        }
+        if (overlap.length === 1) return;
+      }
+    }
+    items.push(llm);
+  });
+
+  return { items, mergeAmbiguous };
+}
+
+function collectItemMatchErrors(items: DraftItemResolved[]): DraftIssue[] {
+  const errors: DraftIssue[] = [];
+  for (const item of items) {
+    const qtyErr = item.product_id
+      ? qtyValidationError(item.qty, item.unit)
+      : qtyValidationError(item.qty, 'pcs');
+    if (item.unresolved && !item.product_id) {
+      if (!item.candidates?.length) {
+        errors.push(issue('product_not_found', `Товар «${item.raw_name}» не найден. Новый товар не создаю.`));
+      } else {
+        errors.push(issue('product_ambiguous', `Товар «${item.raw_name}» неоднозначен. Выберите вариант в карточке.`));
+      }
+    }
+    if (qtyErr) errors.push(issue('qty_invalid', `${item.raw_name}: ${qtyErr}`));
+  }
+  return errors;
+}
+
 export function resolveInvoiceFromCatalogs(
   parsed: ParsedInvoice,
   originalText: string,
@@ -138,47 +287,21 @@ export function resolveInvoiceFromCatalogs(
   const city_name = placed.city_name;
   const city_candidates = placed.city_candidates;
 
-  const lineItems = parseInvoiceItemLines(originalText);
-  const parsedItems = lineItems.length ? lineItems : parsed.items.length ? parsed.items : [];
-  if (parsedItems.length === 0) {
+  const lineItems = parseInvoiceItemLines(originalText).map((raw) => draftItemFromParsed(raw, catalogs.products));
+  const llmItems = (parsed.items || []).map((raw) => draftItemFromParsed(raw, catalogs.products));
+  const merged = mergeLineAndLlmDraftItems(lineItems, llmItems);
+  const items = merged.items;
+  if (items.length === 0) {
     errors.push(issue('items_missing', 'Товары не распознаны. Перечислите название и количество.'));
   }
-
-  const items: DraftItemResolved[] = [];
-  for (const raw of parsedItems) {
-    const matched = resolveProductQuery(raw.name, catalogs.products);
-    const qty = Number(raw.qty);
-    const chosen = matched.chosen;
-    const qtyErr = chosen ? qtyValidationError(qty, chosen.unit) : qtyValidationError(qty, 'pcs');
-    if (matched.reason === 'none') {
-      errors.push(issue('product_not_found', `Товар «${raw.name}» не найден. Новый товар не создаю.`));
-    } else if (!chosen) {
-      errors.push(issue('product_ambiguous', `Товар «${raw.name}» неоднозначен. Выберите вариант в карточке.`));
-    }
-    if (qtyErr) errors.push(issue('qty_invalid', `${raw.name}: ${qtyErr}`));
-    const unresolved = !chosen;
-    const price = raw.is_gift ? 0 : unresolved ? 0 : Number(chosen?.price_retail || 0);
-    const qtySafe = Number.isFinite(qty) ? qty : 0;
-    items.push({
-      raw_name: raw.name,
-      product_id: chosen?.id || null,
-      product_name: chosen?.name || null,
-      unit: chosen?.unit || null,
-      qty: qtySafe,
-      price,
-      is_gift: raw.is_gift === true,
-      stock: null,
-      line_sum: unresolved ? 0 : qtySafe * price,
-      unresolved,
-      candidates:
-        !chosen && matched.candidates.length
-          ? matched.candidates.slice(0, 5).map((p) => ({
-              id: p.id,
-              name: p.name,
-              price: Number(p.price_retail || 0),
-            }))
-          : undefined,
-    });
+  errors.push(...collectItemMatchErrors(items));
+  if (merged.mergeAmbiguous) {
+    warnings.push(
+      issue(
+        'product_merge_ambiguous',
+        'Несколько строк накладной совпали с одним товаром. Количество не угадываю — проверьте позиции в карточке.'
+      )
+    );
   }
 
   if (city_id) {
@@ -193,7 +316,14 @@ export function resolveInvoiceFromCatalogs(
         const onHand = catalogs.stockByCityProduct.get(stockKey(city_id, pid)) ?? 0;
         const name = items.find((i) => i.product_id === pid)?.product_name || pid;
         if (onHand < qty) {
-          errors.push(issue('insufficient_stock', `Недостаточно остатка: ${name}. Нужно ${qty}, на складе ${onHand}.`));
+          warnings.push(
+            issue(
+              'insufficient_stock',
+              onHand <= 0
+                ? `Нет остатка: ${name}. Строка оставлена в карточке — уменьшите количество или оформите предзаказ.`
+                : `Недостаточно остатка: ${name}. Нужно ${qty}, на складе ${onHand}.`
+            )
+          );
         }
       }
     }
@@ -260,13 +390,15 @@ export function resolveInvoiceFromCatalogs(
     items.length > 0 &&
     items.every((i) => i.product_id && !i.unresolved) &&
     Boolean(payment_type);
-  const can_confirm = errors.length === 0 && idsReady;
+  const stockBlocked = warnings.some((w) => w.code === 'insufficient_stock');
+  const mergeBlocked = warnings.some((w) => w.code === 'product_merge_ambiguous');
+  const can_confirm = errors.length === 0 && idsReady && !stockBlocked && !mergeBlocked;
   return { resolved, preview, errors, warnings, can_confirm };
 }
 
-export function draftChoiceHints(errors: DraftIssue[]): string[] {
+export function draftChoiceHints(issues: DraftIssue[]): string[] {
   const hints: string[] = [];
-  const codes = new Set(errors.map((e) => e.code));
+  const codes = new Set(issues.map((e) => e.code));
   if (codes.has('seller_missing') || codes.has('seller_not_found') || codes.has('seller_ambiguous')) {
     hints.push('Выберите продавца');
   }
@@ -276,7 +408,9 @@ export function draftChoiceHints(errors: DraftIssue[]): string[] {
   if (codes.has('payment_unspecified') || codes.has('payment_missing') || codes.has('payment_ambiguous')) {
     hints.push('Выберите Kaspi или наличные');
   }
-  if (codes.has('product_ambiguous')) hints.push('Выберите точный товар (SKU)');
+  if (codes.has('product_ambiguous') || codes.has('product_merge_ambiguous')) {
+    hints.push('Выберите точный товар (SKU)');
+  }
   if (codes.has('product_not_found')) hints.push('Укажите товар из каталога');
   if (codes.has('insufficient_stock')) hints.push('Недостаточно остатка — уменьшите количество или оформите предзаказ');
   return hints;

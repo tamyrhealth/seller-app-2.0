@@ -4,7 +4,7 @@ import { detectPayment, looksLikeInvoice, paymentLabel } from '../lib/assistant/
 import { extractInvoiceCustomer } from '../lib/assistant/customerExtract';
 import { resolveInvoiceFromCatalogs, draftChoiceHints } from '../lib/assistant/invoiceResolve';
 import { sellerMatchesByPhone } from '../lib/assistant/invoiceSeller';
-import { invoiceHeaderSellerName, parseInvoiceItemLines } from '../lib/assistant/invoiceLines';
+import { invoiceHeaderSellerName, mergeParsedInvoiceItems, parseInvoiceItemLines } from '../lib/assistant/invoiceLines';
 import { resolveProductQuery } from '../lib/assistant/productAliases';
 import { isAssistantRole } from '../lib/roles';
 import type { ParsedInvoice } from '../lib/assistant/invoiceParse';
@@ -221,7 +221,8 @@ const lowStock = resolveInvoiceFromCatalogs(
     stockByCityProduct: new Map([['c2:p-tea', 1]]),
   }
 );
-if (!lowStock.errors.some((e) => e.code === 'insufficient_stock')) fail('need insufficient_stock');
+if (!lowStock.warnings.some((e) => e.code === 'insufficient_stock')) fail('need insufficient_stock warning');
+if (lowStock.resolved.items.some((i) => /шай/i.test(i.raw_name)) === false) fail('low stock must keep the tea line');
 if (lowStock.can_confirm) fail('stock block confirm');
 
 if (isAssistantRole('seller')) fail('seller has no assistant');
@@ -232,6 +233,7 @@ if (!card.includes('Закрыть без сохранения')) fail('cancel e
 if (!card.includes("quickSetPayment('kaspi')")) fail('kaspi shortcut');
 if (!card.includes("quickSetPayment('cash')")) fail('cash shortcut');
 if (!card.includes('draftChoiceHints')) fail('choice hints');
+if (!card.includes('Исходная строка')) fail('unresolved must show source line');
 if (!card.includes('lookupSimilarOrders')) fail('similar lookup');
 if (!card.includes('draft.can_confirm')) fail('prefetch similar after fields filled');
 if (!card.includes('setEditing(false)') && !card.includes('closeEditWithoutSave')) fail('close edit');
@@ -253,6 +255,11 @@ if (cancelRoute.includes("rpc('confirm_order'")) fail('draft cancel must not wri
 
 const resolve = read('lib/assistant/resolveOrder.ts');
 if (!resolve.includes('resolveInvoiceFromCatalogs')) fail('catalog resolve');
+if (!resolve.includes('availableQty')) fail('invoice stock must use reserved-aware available');
+if (!resolve.includes('qty_reserved')) fail('invoice resolveOrder must select qty_reserved');
+const invoiceResolveSrc = read('lib/assistant/invoiceResolve.ts');
+if (!invoiceResolveSrc.includes('mergeLineAndLlmDraftItems')) fail('SKU-aware invoice merge');
+if (!invoiceResolveSrc.includes('product_merge_ambiguous')) fail('merge-ambiguous must block confirm');
 const AIGUL_INVOICE = `Айгүл
 Анар 87071234567
 Порошок 1
@@ -362,6 +369,290 @@ if (looksLikeInvoice('Айгүл\nпривет, какие остатки?')) fa
 if (invoiceHeaderSellerName('Айгүл 87771234567\n2 порошок') !== 'Айгүл') {
   fail('packed Айгүл 8777… must still be the seller');
 }
+
+const shtLines = parseInvoiceItemLines('шай 3шт\nшампунь 2 шт\n2шт драже');
+if (shtLines.length !== 3) fail(`шт trio length ${shtLines.length} ${JSON.stringify(shtLines)}`);
+if (!shtLines.some((i) => i.qty === 3 && /^шай$/i.test(i.name))) fail(`шай 3шт parsed ${JSON.stringify(shtLines)}`);
+if (!shtLines.some((i) => i.qty === 2 && /шампунь/i.test(i.name))) fail('шампунь 2 шт');
+if (!shtLines.some((i) => i.qty === 2 && /драже/i.test(i.name))) fail('2шт драже');
+
+const unitLines = parseInvoiceItemLines(
+  'шай 3штук\nшампунь 2 штуки\nдраже 2дана\nпорошок 1 pcs\nмазь 3pcs\nпластырь 2 дана'
+);
+if (unitLines.length !== 6) fail(`unit variants ${unitLines.length} ${JSON.stringify(unitLines)}`);
+for (const [name, qty] of [
+  ['шай', 3],
+  ['шампунь', 2],
+  ['драже', 2],
+  ['порошок', 1],
+  ['мазь', 3],
+  ['пластырь', 2],
+] as const) {
+  if (!unitLines.some((i) => i.qty === qty && i.name.toLowerCase() === name)) {
+    fail(`unit ${name}×${qty}: ${JSON.stringify(unitLines)}`);
+  }
+}
+
+const mergedQty = mergeParsedInvoiceItems(
+  [{ name: 'шай', qty: 3, is_gift: false }],
+  [{ name: 'Шай', qty: 99, is_gift: false }]
+);
+if (mergedQty.length !== 1 || mergedQty[0].qty !== 3) fail(`same-name merge must keep line qty ${JSON.stringify(mergedQty)}`);
+
+const mergedExtra = mergeParsedInvoiceItems(
+  [{ name: 'порошок', qty: 1, is_gift: false }],
+  [
+    { name: 'шампунь', qty: 2, is_gift: false },
+    { name: 'порошок', qty: 9, is_gift: false },
+  ]
+);
+if (mergedExtra.length !== 2) fail(`merge extra length ${mergedExtra.length}`);
+if (!mergedExtra.some((i) => /шампунь/i.test(i.name) && i.qty === 2)) fail('LLM-only line kept');
+if (!mergedExtra.some((i) => /порошок/i.test(i.name) && i.qty === 1)) fail('line qty wins over LLM');
+
+const smokeCatalog = [
+  ...aigulCatalog,
+];
+const smokeSellers = [
+  { id: 's1', display_name: 'Айгүл', city_id: 'c1' },
+  { id: 's-bakyt', display_name: 'Бақыт', city_id: 'c1' },
+  { id: 's-arna', display_name: 'Арна', city_id: 'c1' },
+  { id: 's-gafura', display_name: 'Гафура', city_id: 'c1' },
+];
+const smokeStock = new Map([
+  ...aigulStock,
+  ['c1:p-shamp', 20],
+  ['c1:p-drazhe', 20],
+]);
+
+function smokeDraft(text: string, llmItems: ParsedInvoice['items'] = []) {
+  return resolveInvoiceFromCatalogs(
+    {
+      intent: 'create_order',
+      seller_name: '',
+      city_name: '',
+      customer_name: '',
+      payment_raw: 'Наличка',
+      is_debt: false,
+      is_preorder: false,
+      pickup_date: '',
+      pickup_time: '',
+      note: '',
+      items: llmItems,
+    },
+    text,
+    [],
+    {
+      sellers: smokeSellers,
+      cities,
+      products: smokeCatalog,
+      stockByCityProduct: smokeStock,
+    }
+  );
+}
+
+const aigulSht = smokeDraft(`Айгүл
+Анар 87071234567
+Порошок 2
+шай 3шт
+Наличка`);
+if (aigulSht.resolved.items.length !== 2) fail(`Айгүл items ${aigulSht.resolved.items.map((i) => i.raw_name).join(',')}`);
+if (!aigulSht.resolved.items.some((i) => i.qty === 3 && i.product_id === 'p-tea' && !i.unresolved)) {
+  fail('Айгүл шай 3шт must stay as tea ×3');
+}
+if (!aigulSht.resolved.items.some((i) => i.qty === 2 && i.product_id === 'p-pow')) fail('Айгүл powder ×2');
+if (aigulSht.resolved.payment_type !== 'cash' || aigulSht.resolved.paid_status) fail('Айгүл наличка is cash unpaid');
+if (aigulSht.resolved.total_sum !== 2 * 1000 + 3 * 800) fail(`Айгүл total ${aigulSht.resolved.total_sum}`);
+
+const bakytSht = smokeDraft(`Бақыт
+Клиент 87071111111
+шампунь 2шт
+Наличка`);
+if (bakytSht.resolved.items.length !== 1) fail('Бақыт must keep shampoo line');
+if (bakytSht.resolved.items[0].qty !== 2 || bakytSht.resolved.items[0].product_id !== 'p-shamp' || bakytSht.resolved.items[0].unresolved) {
+  fail('Бақыт шампунь 2шт');
+}
+if (bakytSht.resolved.total_sum !== 900) fail(`Бақыт total ${bakytSht.resolved.total_sum}`);
+if (bakytSht.resolved.payment_type !== 'cash') fail('Бақыт cash');
+
+const arnaSht = smokeDraft(`Арна
+Клиент 87072222222
+драже 2шт
+Наличка`);
+if (!arnaSht.resolved.items.some((i) => i.qty === 2 && i.product_id === 'p-drazhe' && !i.unresolved)) {
+  fail('Арна драже 2шт');
+}
+if (arnaSht.resolved.total_sum !== 800) fail(`Арна total ${arnaSht.resolved.total_sum}`);
+
+const gafuraOk = smokeDraft(`Гафура
+Клиент 87073333333
+Порошок 1
+Шай 1
+1 Пластырь
+Наличка`);
+if (gafuraOk.resolved.items.length !== 3) fail(`Гафура items ${gafuraOk.resolved.items.length}`);
+if (gafuraOk.resolved.total_sum !== 1000 + 800 + 500) fail(`Гафура total ${gafuraOk.resolved.total_sum}`);
+if (gafuraOk.resolved.payment_type !== 'cash' || gafuraOk.resolved.paid_status) fail('Гафура cash not paid-status');
+if (gafuraOk.resolved.items.some((i) => i.unresolved)) fail('Гафура all SKUs unique');
+
+const droppedRecovered = resolveInvoiceFromCatalogs(
+  {
+    intent: 'create_order',
+    seller_name: 'Бақыт',
+    city_name: '',
+    customer_name: '',
+    payment_raw: 'Наличка',
+    is_debt: false,
+    is_preorder: false,
+    pickup_date: '',
+    pickup_time: '',
+    note: '',
+    items: [
+      { name: 'порошок', qty: 1, is_gift: false },
+      { name: 'шампунь', qty: 2, is_gift: false },
+    ],
+  },
+  `Бақыт\nПорошок 1\nНаличка`,
+  [],
+  { sellers: smokeSellers, cities, products: smokeCatalog, stockByCityProduct: smokeStock }
+);
+if (!droppedRecovered.resolved.items.some((i) => i.product_id === 'p-shamp' && i.qty === 2)) {
+  fail('LLM-only shampoo must not be dropped when other lines parsed');
+}
+if (droppedRecovered.resolved.items.filter((i) => i.product_id === 'p-pow').length !== 1) {
+  fail('powder must not duplicate after LLM merge');
+}
+
+const aliasSku = smokeDraft(`Айгүл\nшай 3шт\nНаличка`, [{ name: 'ШАЙ ОРГ 500г', qty: 99, is_gift: false }]);
+if (aliasSku.resolved.items.length !== 1) fail(`alias SKU merge length ${aliasSku.resolved.items.length}`);
+if (aliasSku.resolved.items[0].product_id !== 'p-tea' || aliasSku.resolved.items[0].qty !== 3) {
+  fail(`alias SKU must keep line qty 3, got ${JSON.stringify(aliasSku.resolved.items)}`);
+}
+if (aliasSku.resolved.total_sum !== 2400) fail(`alias SKU total ${aliasSku.resolved.total_sum}`);
+
+const twoUserTea = smokeDraft(`Айгүл\nшай 2шт\nшай 1шт\nНаличка`, [
+  { name: 'ШАЙ ОРГ 500г', qty: 3, is_gift: false },
+]);
+const twoUserTeaLines = twoUserTea.resolved.items.filter((i) => i.product_id === 'p-tea');
+if (twoUserTeaLines.length !== 2) fail(`two user tea lines ${twoUserTeaLines.length}`);
+if (twoUserTeaLines.reduce((s, i) => s + i.qty, 0) !== 3) fail('two user tea lines must total 3');
+if (twoUserTea.warnings.some((w) => w.code === 'product_merge_ambiguous')) {
+  fail('two explicit tea lines are not an LLM merge conflict');
+}
+
+const kremFilled = smokeDraft(`Айгүл\nКрем 3\nНаличка`, [
+  { name: 'Крем дневной', qty: 99, is_gift: false },
+]);
+if (kremFilled.resolved.items.length !== 1) fail(`unique LLM SKU fill length ${kremFilled.resolved.items.length}`);
+if (kremFilled.resolved.items[0].product_id !== 'p-krem1' || kremFilled.resolved.items[0].qty !== 3) {
+  fail('unique LLM SKU may fill one ambiguous line but must keep line qty');
+}
+if (kremFilled.errors.some((e) => e.code === 'product_ambiguous')) {
+  fail('unique cream SKU fill should clear product_ambiguous');
+}
+
+const kremConflict = smokeDraft(`Айгүл\nКрем 3\nНаличка`, [
+  { name: 'Крем дневной', qty: 3, is_gift: false },
+  { name: 'Крем ночной', qty: 3, is_gift: false },
+]);
+if (kremConflict.resolved.items.length !== 1) fail(`ambiguous cream must stay one line ${kremConflict.resolved.items.length}`);
+if (!kremConflict.resolved.items[0].unresolved) fail('do not guess cream SKU when LLM lists both');
+if (!kremConflict.warnings.some((w) => w.code === 'product_merge_ambiguous')) {
+  fail('need product_merge_ambiguous when several SKUs map to one line');
+}
+if (kremConflict.can_confirm) fail('merge-ambiguous cream cannot confirm');
+
+const twoPowCatalog = [
+  ...smokeCatalog,
+  { id: 'p-pow500', name: 'ПОРОШОК ОРГ 500г', unit: 'g', price_retail: 1500, is_active: true },
+];
+const twoPow = resolveInvoiceFromCatalogs(
+  {
+    intent: 'create_order',
+    seller_name: '',
+    city_name: '',
+    customer_name: '',
+    payment_raw: 'Наличка',
+    is_debt: false,
+    is_preorder: false,
+    pickup_date: '',
+    pickup_time: '',
+    note: '',
+    items: [{ name: 'ПОРОШОК ОРГ 250г', qty: 1, is_gift: false }],
+  },
+  `Айгүл\nПорошок 1\nПорошок 2\nНаличка`,
+  [],
+  { sellers: smokeSellers, cities, products: twoPowCatalog, stockByCityProduct: smokeStock }
+);
+if (twoPow.resolved.items.length !== 2) fail(`two powder lines ${twoPow.resolved.items.length}`);
+if (twoPow.resolved.items.some((i) => !i.unresolved)) fail('do not assign one powder SKU to two unresolved lines');
+if (!twoPow.warnings.some((w) => w.code === 'product_merge_ambiguous')) fail('two powder lines + one SKU is merge-ambiguous');
+if (twoPow.can_confirm) fail('ambiguous powder merge cannot confirm');
+
+const unknownKeep = smokeDraft(`Арна\nнесуществующийxyz 2шт\nНаличка`);
+const unknownLine = unknownKeep.resolved.items.find((i) => /несуществующий/i.test(i.raw_name));
+if (!unknownLine || !unknownLine.unresolved || unknownLine.qty !== 2) fail('unknown line must stay unresolved with source qty');
+if (!unknownKeep.errors.some((e) => e.code === 'product_not_found')) fail('unknown needs correction error');
+if (unknownKeep.can_confirm) fail('unknown cannot confirm');
+
+const zeroStock = resolveInvoiceFromCatalogs(
+  {
+    intent: 'create_order',
+    seller_name: 'Марат',
+    city_name: 'Алматы',
+    customer_name: '',
+    payment_raw: 'нал',
+    is_debt: false,
+    is_preorder: false,
+    pickup_date: '',
+    pickup_time: '',
+    note: '',
+    items: [{ name: 'шай', qty: 3, is_gift: false }],
+  },
+  `Марат Алматы\nшай 3шт\nнал`,
+  [],
+  {
+    sellers: otherSellers,
+    cities,
+    products,
+    stockByCityProduct: new Map([['c2:p-tea', 0]]),
+  }
+);
+if (!zeroStock.resolved.items.some((i) => i.product_id === 'p-tea' && i.qty === 3)) fail('zero stock keeps tea');
+if (!zeroStock.warnings.some((w) => w.code === 'insufficient_stock')) fail('zero stock warning');
+if (zeroStock.errors.some((e) => e.code === 'insufficient_stock')) fail('zero stock must not be a blocking error list hide');
+if (zeroStock.can_confirm) fail('zero stock cannot confirm');
+
+const reservedAvail = resolveInvoiceFromCatalogs(
+  baseParsed({
+    seller_name: 'Марат',
+    payment_raw: 'нал',
+    is_preorder: false,
+    items: [{ name: 'шай', qty: 3, is_gift: false }],
+  }),
+  `Марат\nшай 3шт\nнал`,
+  [],
+  {
+    sellers: otherSellers,
+    cities,
+    products,
+    stockByCityProduct: new Map([['c2:p-tea', 1]]),
+  }
+);
+if (!reservedAvail.warnings.some((w) => w.code === 'insufficient_stock')) {
+  fail('available=1 must block sale of 3');
+}
+if (!reservedAvail.resolved.items.some((i) => i.product_id === 'p-tea' && i.qty === 3)) {
+  fail('reserved-aware stock must keep the tea line');
+}
+if (reservedAvail.can_confirm) fail('available shortfall cannot confirm');
+
+const dupLines = smokeDraft(`Айгүл\nшай 2шт\nшай 1шт\nНаличка`);
+const dupTea = dupLines.resolved.items.filter((i) => i.product_id === 'p-tea');
+if (dupTea.length !== 2 || dupTea.reduce((s, i) => s + i.qty, 0) !== 3) {
+  fail(`duplicate tea lines ${JSON.stringify(dupTea)}`);
+}
+
 if (!parseInvoiceItemLines(SAMPLE).some((i) => i.qty === 2 && /порошок/i.test(i.name))) {
   fail('packed invoice qty-first lines must parse');
 }
@@ -385,6 +676,8 @@ if (!parse.includes('это НЕ Kaspi')) fail('parse prompt paid vs method');
 if (!parse.includes('qty может стоять до или после')) fail('parse prompt qty both sides');
 const lines = read('lib/assistant/invoiceLines.ts');
 if (!lines.includes('invoiceHeaderSellerName')) fail('header seller extractor');
+if (!lines.includes('mergeParsedInvoiceItems')) fail('keep mergeParsedInvoiceItems');
+if (!lines.includes('штук(?:а|и)?')) fail('keep шт/штук unit token');
 const invoiceSellerSrc = read('lib/assistant/invoiceSeller.ts');
 if (!invoiceSellerSrc.includes('invoiceHeaderSellerName')) fail('seller resolve must prefer header line');
 if (!parse.includes('НЕ делают предзаказ')) fail('parse prompt date is not preorder');

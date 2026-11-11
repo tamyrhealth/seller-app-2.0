@@ -11,11 +11,11 @@ export function remarksPhrase(n: number): string {
 }
 
 export function buildDraftChatMessage(result: ResolveResult): string {
-  const n = result.errors.length;
+  const n = result.errors.length + result.warnings.length;
   if (n === 0) {
     return 'Накладная распознана. Проверьте карточку заказа.';
   }
-  const hints = draftChoiceHints(result.errors);
+  const hints = draftChoiceHints([...result.errors, ...result.warnings]);
   const extra = hints.length ? ` ${hints.join('. ')}.` : '';
   return `Накладная распознана. Найдены ${remarksPhrase(n)}. Исправьте их в карточке заказа.${extra}`;
 }
