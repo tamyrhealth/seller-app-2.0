@@ -47,6 +47,7 @@ import {
   financeGrossKpi,
   financeMarginKpi,
   financeNetKpi,
+  financeNetLabelKey,
   financeProfitBreakdown,
   financeReliability,
   financeReliabilityLabelKey,
@@ -425,6 +426,20 @@ export default function AdminFinancePage() {
     return `${formatMoney(kpi.amount)} ₸`;
   }
 
+  function opexText(kpi: FinanceKpi): string {
+    if (kpi.kind === 'unavailable') return t('finance.expensesUnconfirmed');
+    return kpiText(kpi);
+  }
+
+  function breakdownText(row: { key: string; kind: FinanceKpi['kind']; amount: number | null }): string {
+    if (row.key === 'finance.otherOpex') return opexText({ kind: row.kind, amount: row.amount });
+    if (row.key === 'finance.net') {
+      return kpiText({ kind: row.kind, amount: row.amount });
+    }
+    if (row.kind === 'unavailable' || row.amount == null) return t('finance.unavailable');
+    return `${formatMoney(row.amount)} ₸`;
+  }
+
   function kpiHint(kpi: FinanceKpi, extra?: string): string | undefined {
     const tag =
       kpi.kind === 'preliminary' ? t('finance.preliminary') : kpi.kind === 'estimate' ? t('finance.estimate') : '';
@@ -538,7 +553,7 @@ export default function AdminFinancePage() {
   const marginKpi = report ? financeMarginKpi(report) : null;
   const reliability = report ? financeReliability(report) : null;
   const liability = report ? sellerLiabilitySplit(report.sellerLiability) : null;
-  const breakdown = report ? financeProfitBreakdown(report) : [];
+  const breakdown = report ? financeProfitBreakdown(report, journalEmpty) : [];
   const reviewWarnings = report
     ? report.warnings.filter((code) =>
         (report.cityScoped
@@ -725,11 +740,11 @@ export default function AdminFinancePage() {
                   ) : null}
                   <KpiCard
                     label={report.cityScoped ? t('finance.cityOpex') : t('finance.otherOpex')}
-                    value={opexKpi.kind === 'unavailable' ? t('finance.expensesNotEntered') : kpiText(opexKpi)}
-                    hint={kpiHint(opexKpi)}
+                    value={opexText(opexKpi)}
+                    hint={kpiHint(opexKpi, journalEmpty && !report.expensesComplete ? t('finance.expensesMayBeMissing') : undefined)}
                   />
                   {companyPnl ? (
-                    <KpiCard label={t('finance.net')} value={kpiText(netKpi)} hint={kpiHint(netKpi)} />
+                    <KpiCard label={t(financeNetLabelKey(netKpi))} value={kpiText(netKpi)} hint={kpiHint(netKpi)} />
                   ) : (
                     <KpiCard
                       label={t('finance.net')}
@@ -771,11 +786,11 @@ export default function AdminFinancePage() {
                 ) : null}
                 <KpiCard
                   label={report.cityScoped ? t('finance.cityOpex') : t('finance.otherOpex')}
-                  value={opexKpi.kind === 'unavailable' ? t('finance.expensesNotEntered') : kpiText(opexKpi)}
-                  hint={kpiHint(opexKpi)}
+                  value={opexText(opexKpi)}
+                  hint={kpiHint(opexKpi, journalEmpty && !report.expensesComplete ? t('finance.expensesMayBeMissing') : undefined)}
                 />
                 {companyPnl ? (
-                  <KpiCard label={t('finance.net')} value={kpiText(netKpi)} hint={kpiHint(netKpi)} />
+                  <KpiCard label={t(financeNetLabelKey(netKpi))} value={kpiText(netKpi)} hint={kpiHint(netKpi)} />
                 ) : (
                   <KpiCard label={t('finance.net')} value={t('finance.unavailable')} hint={t('finance.cityOperational')} />
                 )}
@@ -790,19 +805,25 @@ export default function AdminFinancePage() {
 
               {companyPnl ? (
                 <>
-              <Section title={t('finance.profitBreakdown')}>
+              <Section
+                title={t('finance.profitBreakdown')}
+                hint={reliability === 'preliminary' ? t('finance.expensesIncomplete') : undefined}
+              >
                 <div className="min-w-0 space-y-1.5 text-sm">
                   {breakdown.map((row) => {
-                    const amountText = Number.isNaN(row.amount)
-                      ? t('finance.unavailable')
-                      : `${formatMoney(row.amount)} ₸`;
                     const sign = row.sign === 'minus' ? '−' : row.sign === 'plus' ? '+' : '=';
+                    const labelKey = row.key === 'finance.net' ? financeNetLabelKey(row) : row.key;
                     return (
-                      <div key={row.key} className="flex min-w-0 items-baseline justify-between gap-3">
+                      <div
+                        key={row.key}
+                        className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3"
+                      >
                         <span className="min-w-0 text-slate-600">
-                          {sign} {t(row.key as 'finance.revenue')}
+                          {sign} {t(labelKey as 'finance.revenue')}
                         </span>
-                        <span className="shrink-0 tabular-nums text-slate-900">{amountText}</span>
+                        <span className="break-words text-right tabular-nums text-slate-900 sm:shrink-0">
+                          {breakdownText(row)}
+                        </span>
                       </div>
                     );
                   })}

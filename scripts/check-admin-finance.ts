@@ -47,6 +47,7 @@ import {
   financeCogsHintKey,
   financeGrossKpi,
   financeNetKpi,
+  financeNetLabelKey,
   financeProfitBreakdown,
   financeReliability,
   sellerLiabilitySplit,
@@ -448,6 +449,43 @@ if (partialExp.operatingExpenses !== 100) fail('partial journal still sums opex'
 if (financeOpexKpi(partialExp, false).kind !== 'estimate' || financeOpexKpi(partialExp, false).amount !== 100) {
   fail('partial journal opex remains estimate');
 }
+
+const emptyJournalBd = financeProfitBreakdown(emptyIncomplete, true);
+const emptyJournalNet = financeNetKpi(emptyIncomplete);
+if (emptyJournalBd[6].kind !== 'unavailable' || emptyJournalBd[6].amount != null) {
+  fail('empty unconfirmed journal must not display proven 0 opex');
+}
+if (emptyJournalBd[7].kind !== 'preliminary' || emptyJournalBd[7].amount !== emptyJournalNet.amount) {
+  fail('empty journal preliminary net must match kpi');
+}
+if (financeNetLabelKey(emptyJournalNet) !== 'finance.netPreliminary') fail('preliminary net label');
+
+const confirmedZeroBd = financeProfitBreakdown(empty, true);
+if (confirmedZeroBd[6].kind !== 'fact' || confirmedZeroBd[6].amount !== 0) {
+  fail('confirmed empty journal may display 0 opex');
+}
+if (confirmedZeroBd[7].kind !== 'estimate' || confirmedZeroBd[7].amount !== 0) {
+  fail('confirmed empty net still 0');
+}
+
+const missingBd = financeProfitBreakdown(missing, true);
+if (financeNetKpi(missing).kind !== 'unavailable' || financeNetKpi(missing).amount != null) {
+  fail('incomplete cogs hides net kpi');
+}
+if (missingBd[7].kind !== 'unavailable' || missingBd[7].amount != null) {
+  fail('incomplete cogs hides breakdown net');
+}
+
+const fullBd = financeProfitBreakdown(company, false);
+const fullNet = financeNetKpi(company);
+if (fullBd[6].kind !== 'estimate' || fullBd[6].amount !== 1500) fail('confirmed opex amount in breakdown');
+if (fullBd[7].kind !== fullNet.kind || fullBd[7].amount !== fullNet.amount) fail('complete net matches kpi');
+if (fullNet.amount !== 6500) fail('complete net amount');
+if (financeNetLabelKey(fullNet) !== 'finance.net') fail('complete net label');
+const openExpBd = financeProfitBreakdown(incompleteExp, false);
+if (openExpBd[6].kind !== 'estimate' || openExpBd[6].amount !== 1500) fail('unconfirmed entered opex still shown');
+if (openExpBd[7].kind !== 'preliminary' || openExpBd[7].amount !== 6500) fail('unconfirmed expenses keep preliminary net');
+if (openExpBd[7].amount !== financeNetKpi(incompleteExp).amount) fail('open expenses kpi/breakdown net');
 if (partialExp.estimatedNetProfit !== null) fail('partial journal net stays untrusted');
 if (!periodExpenseJournalEmpty([], fromYmd, toYmd)) fail('no rows is empty journal');
 if (periodExpenseJournalEmpty([{ expense_date: fromYmd, category: 'ads', amount: 1 }], fromYmd, toYmd)) {
@@ -897,7 +935,9 @@ if (!page.includes('expensesCompleteHint') || !page.includes('expensesCompleteFo
 if (!page.includes('setConfirmedExpensePeriod(periodKey)')) fail('complete bound to current period');
 if (!page.includes('setConfirmedExpensePeriod(null)')) fail('uncheck clears confirmation');
 if (page.includes('setExpensesComplete(false)') && page.includes('[periodKey]')) fail('must not reset completeness in an effect after render');
-if (!page.includes('finance.expensesNotEntered') || !page.includes('financeOpexKpi')) fail('empty journal opex copy');
+if (!page.includes('finance.expensesUnconfirmed') || !page.includes('financeOpexKpi')) fail('empty journal opex copy');
+if (!page.includes('financeNetLabelKey') || !page.includes('opexText')) fail('aligned net/opex display helpers');
+if (!page.includes('financeProfitBreakdown(report, journalEmpty)')) fail('breakdown uses same empty-journal flag as kpi');
 if (!page.includes('finance.expensesEmptyConfirm')) fail('empty journal explicit confirm');
 if (!page.includes('journalEmpty && !window.confirm')) fail('empty-journal confirm only');
 if (page.includes('writeUserUi') || page.includes('localStorage')) fail('must not persist month-close');
@@ -1171,6 +1211,15 @@ if (bd[0].key !== 'finance.revenue' || bd[5].key !== 'finance.goodsCreditAdj' ||
   fail('breakdown order');
 }
 if (bd[5].sign !== 'plus') fail('goods credit is expense correction');
+if (bd[7].kind !== financeNetKpi(goodsIssue).kind || bd[7].amount !== financeNetKpi(goodsIssue).amount) {
+  fail('goods issue breakdown net matches kpi');
+}
+
+const disconnectedBd = financeProfitBreakdown(disconnected, false);
+if (disconnectedBd[7].kind !== 'unavailable' || disconnectedBd[7].amount != null) {
+  fail('missing commissions hide breakdown net');
+}
+if (financeNetKpi(disconnected).kind !== 'unavailable') fail('missing commissions hide net kpi');
 
 if (!page.includes('FINANCE_SELLER_PNL_RPC') || !page.includes('finance.pnlDisconnected')) {
   fail('finance page must load seller pnl');
@@ -1228,8 +1277,11 @@ if (FINANCE_EXPENSE_EVENTS_RPC !== 'admin_finance_expense_events') fail('events 
 if (!FINANCE_ORDER_SELECT.includes('order_items(id, product_id')) fail('finance select includes item id');
 if (!i18n.includes("'finance.cogsHintHistorical':") || !i18n.includes("'finance.cogsHintMixed':")) fail('i18n snapshot hints');
 if (!i18n.includes("'finance.cogsMixed':") || !i18n.includes("'finance.snapshotsUnavailable':")) fail('i18n snapshot banners');
-if (!i18n.includes("'finance.expensesNotEntered': 'Расходы не внесены'")) fail('i18n empty opex ru');
-if (!i18n.includes("'finance.expensesNotEntered': 'Шығындар енгізілмеген'")) fail('i18n empty opex kz');
+if (!i18n.includes("'finance.expensesUnconfirmed': 'Расходы не подтверждены'")) fail('i18n empty opex ru');
+if (!i18n.includes("'finance.expensesUnconfirmed': 'Шығындар расталмаған'")) fail('i18n empty opex kz');
+if (!i18n.includes("'finance.netPreliminary': 'Предварительная прибыль'")) fail('i18n preliminary net ru');
+if (!i18n.includes("'finance.netPreliminary': 'Алдын ала пайда'")) fail('i18n preliminary net kz');
+if (!i18n.includes("'finance.expensesMayBeMissing':")) fail('i18n expenses may be missing');
 if (!i18n.includes("'finance.expensesEmptyConfirm':")) fail('i18n empty journal confirm');
 
 void (async () => {

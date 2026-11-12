@@ -210,13 +210,22 @@ export function financeNetKpi(report: AdminFinanceReport): FinanceKpi {
   return { kind: 'estimate', amount: report.estimatedNetProfit };
 }
 
+export function financeNetLabelKey(kpi: FinanceKpi): string {
+  return kpi.kind === 'preliminary' ? 'finance.netPreliminary' : 'finance.net';
+}
+
 export function sellerLiabilitySplit(balance: number): { companyOwes: number; sellerOwes: number } {
   if (balance > 0) return { companyOwes: balance, sellerOwes: 0 };
   if (balance < 0) return { companyOwes: 0, sellerOwes: -balance };
   return { companyOwes: 0, sellerOwes: 0 };
 }
 
-export type FinanceBreakdownRow = { key: string; sign: 'plus' | 'minus' | 'eq'; amount: number };
+export type FinanceBreakdownRow = {
+  key: string;
+  sign: 'plus' | 'minus' | 'eq';
+  amount: number | null;
+  kind: FinanceKpiKind;
+};
 
 export function financeWarningKey(code: AdminFinanceReport['warnings'][number]): string {
   const map: Record<AdminFinanceReport['warnings'][number], string> = {
@@ -241,16 +250,29 @@ export function financeWarningKey(code: AdminFinanceReport['warnings'][number]):
   return map[code];
 }
 
-export function financeProfitBreakdown(report: AdminFinanceReport): FinanceBreakdownRow[] {
+function breakdownLine(
+  key: string,
+  sign: FinanceBreakdownRow['sign'],
+  kpi: FinanceKpi
+): FinanceBreakdownRow {
+  return { key, sign, amount: kpi.amount, kind: kpi.kind };
+}
+
+export function financeProfitBreakdown(
+  report: AdminFinanceReport,
+  journalEmpty = false
+): FinanceBreakdownRow[] {
+  const opex = financeOpexKpi(report, journalEmpty);
+  const net = financeNetKpi(report);
   return [
-    { key: 'finance.revenue', sign: 'plus', amount: report.revenue },
-    { key: 'finance.salesCogs', sign: 'minus', amount: report.salesCogs },
-    { key: 'finance.commissionAccrual', sign: 'minus', amount: report.commissionAccrual },
-    { key: 'finance.commissionReversal', sign: 'plus', amount: report.commissionReversal },
-    { key: 'finance.goodsIssueCogs', sign: 'minus', amount: report.goodsIssueCogs },
-    { key: 'finance.goodsCreditAdj', sign: 'plus', amount: report.goodsSettlementCredit },
-    { key: 'finance.otherOpex', sign: 'minus', amount: report.otherOperatingExpenses },
-    { key: 'finance.net', sign: 'eq', amount: report.estimatedNetProfit ?? Number.NaN },
+    breakdownLine('finance.revenue', 'plus', { kind: 'fact', amount: report.revenue }),
+    breakdownLine('finance.salesCogs', 'minus', financeCogsKpi(report)),
+    breakdownLine('finance.commissionAccrual', 'minus', { kind: 'fact', amount: report.commissionAccrual }),
+    breakdownLine('finance.commissionReversal', 'plus', { kind: 'fact', amount: report.commissionReversal }),
+    breakdownLine('finance.goodsIssueCogs', 'minus', { kind: 'fact', amount: report.goodsIssueCogs }),
+    breakdownLine('finance.goodsCreditAdj', 'plus', { kind: 'fact', amount: report.goodsSettlementCredit }),
+    breakdownLine('finance.otherOpex', 'minus', opex),
+    breakdownLine('finance.net', 'eq', net),
   ];
 }
 
